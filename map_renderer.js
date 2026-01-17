@@ -198,8 +198,9 @@ class MapRenderer {
         this.rulerTooltip.setLatLng(latlng).setContent(`${distStr} | ${dirStr}`).addTo(this.rulerLayer);
     }
 
-    finishRuler() {
-        // Logic handled in click and move, just stay until escaped or re-clicked
+    setSectorHighlight(id, color) {
+        this.externalHighlight = { id, color };
+        this.renderSites(false); // Re-render to apply
     }
 
     clearRuler() {
@@ -1033,9 +1034,19 @@ class MapRenderer {
                 let color;
                 let finalOpacity = opacity;
                 let finalFillOpacity = opacity; // User requested 100% opacity by default
+                let weight = 1;
+                let radiusOffset = 0;
 
-                if (activeCellIds) {
-                    // HIGHLIGHT MODE
+                // 1. External Highlight (User Click) - Highest Priority
+                if (this.externalHighlight && (s.cellId == this.externalHighlight.id || `${s.rnc}/${s.cid}` == this.externalHighlight.id)) {
+                    color = this.externalHighlight.color;
+                    finalOpacity = 1;
+                    finalFillOpacity = 0.8;
+                    weight = 4; // Thick border
+                    radiusOffset = 10; // Make it larger
+                }
+                else if (activeCellIds) {
+                    // HIGHLIGHT MODE (KPIs)
                     color = '#555';
                     finalOpacity = 0.4;
                     finalFillOpacity = 0.15;
@@ -1065,20 +1076,34 @@ class MapRenderer {
                     return [originLat + dLat, originLng + dLng];
                 };
 
-                const p1 = getPoint(s.lat, s.lng, azimuth - beam / 2, range);
-                const p2 = getPoint(s.lat, s.lng, azimuth + beam / 2, range);
+                let polygon;
+                if (s.beam > 300) { // Omni
+                    polygon = L.circle(center, {
+                        radius: range + radiusOffset,
+                        color: color,
+                        weight: weight,
+                        fillColor: color,
+                        fillOpacity: finalFillOpacity,
+                        opacity: finalOpacity,
+                        pane: 'sitesPane',
+                        renderer: this.sitesRenderer
+                    }).addTo(this.sitesLayer);
+                } else {
+                    const p1 = getPoint(s.lat, s.lng, azimuth - beam / 2, range + radiusOffset);
+                    const p2 = getPoint(s.lat, s.lng, azimuth + beam / 2, range + radiusOffset);
 
-                const polygon = L.polygon([center, p1, p2], {
-                    color: '#ffffff',
-                    weight: 1.5,
-                    fillColor: color,
-                    fillOpacity: finalFillOpacity,
-                    opacity: 0.9,
-                    className: 'sector-polygon',
-                    interactive: true,
-                    pane: 'sitesPane',
-                    renderer: this.sitesRenderer
-                }).addTo(this.sitesLayer);
+                    polygon = L.polygon([center, p1, p2], {
+                        color: color,
+                        weight: weight,
+                        fillColor: color,
+                        fillOpacity: finalFillOpacity,
+                        opacity: finalOpacity,
+                        className: 'sector-polygon',
+                        interactive: true,
+                        pane: 'sitesPane',
+                        renderer: this.sitesRenderer
+                    }).addTo(this.sitesLayer);
+                }
 
                 if (s.cellId) {
                     this.sitePolygons[s.cellId] = polygon;

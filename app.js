@@ -110,7 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 lat: servingCell.lat,
                 lng: servingCell.lng,
                 azimuth: servingCell.azimuth, // Pass Azimuth
-                range: 100, // Default range or get from settings if possible
+                range: 0, // Go to Sector Vertex (Tip/Center)
                 color: color || '#3b82f6', // Default Blue
                 cellId: servingCell.cellId // For polygon centroid logic (legacy fallback)
             };
@@ -3649,9 +3649,27 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
 
+    // ----------------------------------------------------
+    // --- Global Helper: Highlight and Pan ---
+    // ----------------------------------------------------
+    // --- Global Helper: Highlight and Pan ---
+    window.highlightAndPan = (lat, lng, cellId, type) => {
+        // 1. Pan to Sector (Keep Zoom)
+        if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+            if (window.map) window.map.panTo([lat, lng]);
+            else if (window.mapRenderer && window.mapRenderer.map) window.mapRenderer.map.panTo([lat, lng]);
+        }
+
+        // 2. Highlight Sector
+        if (window.mapRenderer && cellId) {
+            const color = (type === 'serving') ? '#3b82f6' : '#22c55e'; // Blue or Green
+            window.mapRenderer.setSectorHighlight(cellId, color);
+        }
+    };
 
     // Helper: Generate HTML and Connections for a SINGLE point
     function generatePointInfoHTML(p, logColor) {
+        // ... (existing code) ...
         let connectionTargets = [];
         const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
         const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
@@ -4200,10 +4218,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (nRes && nRes.name && nRes.name !== 'Unknown') {
-                    return { name: nRes.name, rnc: nRes.rnc, cid: nRes.cid };
+                    return { name: nRes.name, rnc: nRes.rnc, cid: nRes.cid, id: nRes.id, lat: nRes.lat, lng: nRes.lng };
                 }
             }
-            return { name: cellName || 'Unknown', rnc: null, cid: null };
+            return { name: cellName || 'Unknown', rnc: null, cid: null, id: null, lat: null, lng: null };
         };
 
         if (p.parsed && p.parsed.neighbors) {
@@ -4246,6 +4264,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 name: resolved.name,
                 rnc: resolved.rnc,
                 cid: resolved.cid,
+                id: resolved.id, // Pass ID
+                lat: resolved.lat,
+                lng: resolved.lng,
                 sc: n.sc,
                 rscp: n.rscp === -140 ? '-' : n.rscp,
                 ecno: n.ecno,
@@ -4255,11 +4276,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Build HTML
         let rows = '';
+
+        // Serving Click Logic
+        let sClickAction = '';
+        /* FIX: Use highlightAndPan */
+        if (servingRes && servingRes.lat && servingRes.lng) {
+            const safeId = servingRes.id || (servingRes.rnc && servingRes.cid ? `${servingRes.rnc}/${servingRes.cid}` : '');
+            sClickAction = `onclick="window.highlightAndPan(${servingRes.lat}, ${servingRes.lng}, '${safeId}', 'serving')" style="cursor:pointer; color:#fff;"`;
+        }
+
         // Serving Row
         rows += `
             <tr class="log-row serving-row">
                 <td class="log-cell-type">Serving</td>
-                <td class="log-cell-name"><span class="log-header-serving">${sName}</span> <span style="color:#666; font-size:10px;">(${identityLabel})</span></td>
+                <td class="log-cell-name"><span class="log-header-serving" ${sClickAction}>${sName}</span> <span style="color:#666; font-size:10px;">(${identityLabel})</span></td>
                 <td class="log-cell-val">${sSC}</td>
                 <td class="log-cell-val">${sRSCP}</td>
                 <td class="log-cell-val">${sEcNo}</td>
@@ -4271,10 +4301,17 @@ document.addEventListener('DOMContentLoaded', () => {
             let nIdLabel = `${n.sc}/${n.freq}`;
             if (n.rnc && n.cid) nIdLabel = `${n.rnc}/${n.cid}`;
 
+            let nClickAction = '';
+            /* FIX: Use highlightAndPan */
+            if (n.lat && n.lng) {
+                const safeId = n.id || (n.rnc && n.cid ? `${n.rnc}/${n.cid}` : '');
+                nClickAction = `onclick="window.highlightAndPan(${n.lat}, ${n.lng}, '${safeId}', 'neighbor')" style="cursor:pointer;"`;
+            }
+
             rows += `
                 <tr class="log-row">
                     <td class="log-cell-type">${n.type}</td>
-                    <td class="log-cell-name">${n.name} <span style="color:#666; font-size:10px;">(${nIdLabel})</span></td>
+                    <td class="log-cell-name"><span ${nClickAction}>${n.name}</span> <span style="color:#666; font-size:10px;">(${nIdLabel})</span></td>
                     <td class="log-cell-val">${n.sc}</td>
                     <td class="log-cell-val">${n.rscp}</td>
                     <td class="log-cell-val">${n.ecno}</td>
