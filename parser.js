@@ -215,6 +215,22 @@ const NMFParser = {
                 const techId = parseInt(parts[3]);
                 let servingFreq = parseFloat(parts[7]);
                 let servingLevel = parseFloat(parts[8]);
+
+                // SANITY CHECK: Fix for indices shifts (e.g. 70003 instead of RSCP)
+                // RSCP/RSRP should be negative. If > -15 (allow some margin close to 0), it's suspicious.
+                if (servingLevel > -15 || isNaN(servingLevel)) {
+                    // Try adjacent columns for a plausible signal level (-140 to -25)
+                    const candidates = [9, 10, 6, 11, 12];
+                    for (let cIdx of candidates) {
+                        if (cIdx < parts.length) {
+                            const val = parseFloat(parts[cIdx]);
+                            if (!isNaN(val) && val >= -140 && val <= -25) {
+                                servingLevel = val;
+                                break;
+                            }
+                        }
+                    }
+                }
                 let servingBand = 'Unknown';
                 let servingSc = null;
                 let servingEcNo = null;
@@ -251,7 +267,11 @@ const NMFParser = {
                     currentNeighbors = neighbors;
                 }
 
-                const rnc = state.rnc;
+                let rnc = state.rnc;
+                // Robust Fallback: Extract RNC from Long ID if missing
+                if ((!rnc || isNaN(rnc)) && state.cid > 65535) {
+                    rnc = state.cid >> 16;
+                }
                 const cid = (state.cid && !isNaN(state.cid)) ? (state.cid & 0xFFFF) : null;
 
                 const point = {

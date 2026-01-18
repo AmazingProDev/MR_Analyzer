@@ -3628,9 +3628,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const s = window.mapRenderer.getServingCell(p);
 
             if (s) {
+                // Fix: Align ID format with MapRenderer.getSiteColor (RNC/CID priority)
+                let finalId = s.cellId || s.calculatedEci || s.id;
+                if (s.rnc && s.cid) finalId = `${s.rnc}/${s.cid}`;
+
                 return {
                     name: s.cellName || s.name || s.siteName,
-                    id: s.cellId || s.calculatedEci || s.id,
+                    id: finalId,
                     lat: s.lat,
                     lng: s.lng,
                     azimuth: s.azimuth,
@@ -4092,22 +4096,53 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Global function to update the Floating Info Panel (Single Point)
-    window.updateFloatingInfoPanel = (p) => {
+    window.updateFloatingInfoPanel = (p, logColor) => {
         try {
             const panel = document.getElementById('floatingInfoPanel');
             const content = document.getElementById('infoPanelContent');
+            const headerDom = document.getElementById('infoPanelHeader'); // GET HEADER
+
             if (!panel || !content) return;
 
             if (panel.style.display !== 'block') panel.style.display = 'block';
 
-            const { html, connectionTargets } = generatePointInfoHTML(p);
+            // 1. Set Stash for Toggle Re-render compatibility (Treat single as one-item array)
+            // This ensures window.togglePointDetailsMode() works because it calls updateFloatingInfoPanelMulti(lastMultiHits)
+            window.lastMultiHits = [p];
+
+            // 2. Inject Toggle Button if missing
+            let toggleBtn = document.getElementById('toggleViewBtn');
+            if (headerDom && !toggleBtn) {
+                const closeBtn = headerDom.querySelector('.info-panel-close');
+                toggleBtn = document.createElement('span');
+                toggleBtn.id = 'toggleViewBtn';
+                toggleBtn.className = 'toggle-view-btn';
+                toggleBtn.innerHTML = '⚙️ View';
+                toggleBtn.title = 'Switch View Mode';
+                toggleBtn.onclick = (e) => { e.stopPropagation(); window.togglePointDetailsMode(); };
+                toggleBtn.style.marginRight = '10px';
+                toggleBtn.style.fontSize = '12px';
+                toggleBtn.style.cursor = 'pointer';
+                toggleBtn.style.color = '#ccc';
+
+                if (closeBtn) headerDom.insertBefore(toggleBtn, closeBtn);
+                else headerDom.appendChild(toggleBtn);
+            }
+
+            // 3. Select Generator based on Mode
+            const mode = window.pointDetailsMode || 'log'; // Default to log if undefined
+            const generator = mode === 'log' ? generatePointInfoHTMLLog : generatePointInfoHTML;
+
+            // 4. Generate
+            // Note: generatePointInfoHTMLLog takes (p, logColor)
+            // Note: generatePointInfoHTML takes (p, logColor) - now updated to use it
+            const { html, connectionTargets } = generator(p, logColor);
+
             content.innerHTML = html;
 
             // Update Connections
             if (window.mapRenderer && !window.isSpiderMode) {
-                // Find start point
                 let startPt = { lat: p.lat, lng: p.lng };
-                // (Polygon centroid logic would go here if needed again, or rely on pass)
                 window.mapRenderer.drawConnections(startPt, connectionTargets);
             }
         } catch (e) {
@@ -4117,7 +4152,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // NEW: Multi-Layer Info Panel
     // --- NEW: Toggle Logic ---
-    window.pointDetailsMode = 'simple'; // 'simple' or 'log'
+    window.pointDetailsMode = 'log'; // 'simple' or 'log'
 
     window.togglePointDetailsMode = () => {
         window.pointDetailsMode = window.pointDetailsMode === 'simple' ? 'log' : 'simple';
@@ -4407,7 +4442,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Header for this Log Layer
                 const header = document.createElement('div');
-                header.style.cssText = `background:${log.color || '#444'}; color:#fff; padding:5px; font-weight:bold; font-size:12px; margin-top:${idx > 0 ? '10px' : '0'}; border-radius:4px 4px 0 0;`;
+                header.style.cssText = `background:#ef4444; color:#fff; padding:5px; font-weight:bold; font-size:12px; margin-top:${idx > 0 ? '10px' : '0'}; border-radius:4px 4px 0 0;`;
                 header.textContent = `Layer: ${log.name}`;
                 content.appendChild(header);
 
@@ -4508,7 +4543,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 3. Update Floating Panel
         if (window.updateFloatingInfoPanel && !skipPanel) {
-            window.updateFloatingInfoPanel(point);
+            window.updateFloatingInfoPanel(point, log.color);
         }
 
         // 4. Update Grid
@@ -4567,43 +4602,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Global Sync Listener (Legacy Adapatation)
+    // Global Sync Listener (Aligning with User Logic: Coordinator Pattern)
     window.addEventListener('map-point-clicked', (e) => {
         const { logId, point, source } = e.detail;
 
-        // --- MULTI-LAYER SEARCH ---
-        const SEARCH_RADIUS = 0.0002; // ~20m tolerance
-        const allHits = [];
-
-        // Always add the clicked point (Primary)
-        // Find the log object for the primary point
-        const primaryLog = loadedLogs.find(l => l.id === logId);
-        if (primaryLog) {
-            const primaryHit = { log: primaryLog, point: point };
-            // Search other logs
-            loadedLogs.forEach(targetLog => {
-                if (!targetLog.visible || targetLog.id === logId) return;
-
-                const hit = targetLog.points.find(p =>
-                    Math.abs(p.lat - point.lat) < SEARCH_RADIUS &&
-                    Math.abs(p.lng - point.lng) < SEARCH_RADIUS
-                );
-
-                if (hit) {
-                    allHits.push({ log: targetLog, point: hit });
-                }
-            });
-            // Add Primary FIRST
-            allHits.unshift(primaryHit);
-        }
-
-        // Update Panel with Multi-Hits
-        if (window.updateFloatingInfoPanelMulti) {
-            window.updateFloatingInfoPanelMulti(allHits);
-        }
-
         const log = loadedLogs.find(l => l.id === logId);
         if (log) {
-            // Prioritize ID match (for SHP/uniquely indexed points)
+            // Prioritize ID match
             let index = -1;
             if (point.id !== undefined) {
                 index = log.points.findIndex(p => p.id === point.id);
@@ -4618,12 +4623,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (index !== -1) {
-                // Call Sync but SKIP panel update (since we just did the rich multi-update)
-                window.globalSync(logId, index, source || 'map', true);
+                // The Coordinator: globalSync
+                // Logic: catches map-point-clicked and calls window.globalSync(). 
+                // It specifically invokes window.updateFloatingInfoPanel(point) (via skipPanel=false default)
+                window.globalSync(logId, index, source || 'map');
             } else {
-                // FALLBACK: If sync fails (no index found), we already updated the panel above!
-                // So we do nothing here.
-                console.warn("[App] Sync Index not found. Details panel updated via Multi-Hit logic.");
+                console.warn("[App] Sync Index not found for clicked point.");
+                // Fallback: If we can't sync index, just update the panel directly
+                if (window.updateFloatingInfoPanel) {
+                    window.updateFloatingInfoPanel(point);
+                }
             }
         }
     });
@@ -4965,15 +4974,25 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (isNaN(rnc) || !rnc) {
                             const candidates = [String(enodebCellIdRaw), String(cellId), String(name)];
                             for (let c of candidates) {
-                                if (c && (c.includes('-') || c.includes('/'))) {
-                                    const parts = c.split(/[-/]/);
-                                    if (parts.length === 2) {
-                                        const p1 = parseInt(parts[0]);
-                                        if (!isNaN(p1) && p1 > 0 && p1 < 65535) {
-                                            rnc = p1;
-                                            // Also recover CID if missing
-                                            if (isNaN(cid)) cid = parseInt(parts[1]);
-                                            break;
+                                if (c) {
+                                    // Check if it's a Big Int (RNC+CID)
+                                    const val = parseInt(c);
+                                    if (!isNaN(val) && val > 65535) {
+                                        rnc = val >> 16;
+                                        cid = val & 0xFFFF;
+                                        break;
+                                    }
+
+                                    if (c.includes('-') || c.includes('/')) {
+                                        const parts = c.split(/[-/]/);
+                                        if (parts.length === 2) {
+                                            const p1 = parseInt(parts[0]);
+                                            if (!isNaN(p1) && p1 > 0 && p1 < 65535) {
+                                                rnc = p1;
+                                                // Also recover CID if missing
+                                                if (isNaN(cid)) cid = parseInt(parts[1]);
+                                                break;
+                                            }
                                         }
                                     }
                                 }

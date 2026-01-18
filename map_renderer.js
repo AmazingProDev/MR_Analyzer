@@ -249,6 +249,13 @@ class MapRenderer {
     getColor(val, metric = 'level') {
         if (val === undefined || val === null || val === 'N/A' || val === '') return '#888';
 
+        // 1. Priority: Discrete Identity Metrics
+        // (Moved up to prevent 'Cell ID' being matched as 'level' by getThresholdKey default)
+        if (['cellId', 'cid', 'pci', 'sc', 'lac', 'serving_cell_name', 'Cell ID'].includes(metric)) {
+            return this.getDiscreteColor(val);
+        }
+
+        // 2. Thematic Thresholds
         if (window.getThresholdKey && window.themeConfig) {
             const rangeKey = window.getThresholdKey(metric);
             if (rangeKey) {
@@ -264,10 +271,6 @@ class MapRenderer {
             }
         }
 
-        if (['cellId', 'cid', 'pci', 'sc', 'lac', 'serving_cell_name'].includes(metric)) {
-            return this.getDiscreteColor(val);
-        }
-
         return '#3b82f6';
     }
 
@@ -281,7 +284,7 @@ class MapRenderer {
         }
 
         // 2. Identity Resolution (Smart ID)
-        if (metric === 'cellId' || metric === 'cid') {
+        if (metric === 'cellId' || metric === 'cid' || metric === 'Cell ID') {
             if (window.resolveSmartSite) {
                 const resolved = window.resolveSmartSite(p);
                 if (resolved && resolved.id) return resolved.id;
@@ -405,6 +408,9 @@ class MapRenderer {
     }
 
     getServingCell(p) {
+        // PERFORMANCE: Check Cache
+        if (p._cachedServing !== undefined) return p._cachedServing;
+
         if (!this.siteIndex) {
             console.warn('[MapRenderer] getServingCell: Site Index is missing!');
             return null;
@@ -412,7 +418,7 @@ class MapRenderer {
         // Uses this.siteIndex.all instead of this.siteData
         const siteData = this.siteIndex.all;
         if (!siteData || siteData.length === 0) {
-            console.warn('[MapRenderer] getServingCell: No site data in index.');
+            // console.warn('[MapRenderer] getServingCell: No site data in index.'); // Too verbose
             return null;
         }
 
@@ -498,22 +504,73 @@ class MapRenderer {
             if (candidates.length === 1) return candidates[0];
             if (candidates.length > 1) {
                 // If multiple candidates, pick the closest one
-                return candidates.sort((a, b) => {
+                const winner = candidates.sort((a, b) => {
                     const distA = Math.pow(a.lat - p.lat, 2) + Math.pow(a.lng - p.lng, 2);
                     const distB = Math.pow(b.lat - p.lat, 2) + Math.pow(b.lng - p.lng, 2);
                     return distA - distB;
                 })[0];
+                p._cachedServing = winner;
+                return winner;
             }
         }
 
         // 4. Last Resort: CellID Only
         if (cellId) {
             const norm = String(cellId).replace(/\s/g, '');
-            if (this.siteIndex.byId.has(norm)) return this.siteIndex.byId.get(norm);
-            const s = siteData.find(x => x.cellId == cellId);
-            if (s) return s;
+            if (this.siteIndex.byId.has(norm)) {
+                const s = this.siteIndex.byId.get(norm);
+                p._cachedServing = s; // Cache
+                return s;
+            }
+
+            // Fix: Check for Long ID decomposition (RNC/CID)
+            const val = Number(cellId);
+            if (!isNaN(val) && val > 65535) {
+                const rnc = val >> 16;
+                const cid = val & 0xFFFF;
+
+                // 1. Exact Match
+                let key = `${rnc}/${cid}`;
+                if (this.siteIndex.byId.has(key)) {
+                    const s = this.siteIndex.byId.get(key);
+                    p._cachedServing = s;
+                    return s;
+                }
+
+                // 2. Masked Match (Bit 12 Issue)
+                const maskedCid = cid & 0xEFFF;
+                const maskedKey = `${rnc}/${maskedCid}`;
+                if (this.siteIndex.byId.has(maskedKey)) {
+                    const s = this.siteIndex.byId.get(maskedKey);
+                    p._cachedServing = s;
+                    return s;
+                }
+
+                // 3. Short ID Match (Shifted CID) - keys might not be in index, search siteData
+                // This matches RNC + (CID >> 4)
+                const shortCid = cid >> 4;
+                const shortMatch = siteData.find(x => x.rnc == rnc && (x.cid >> 4) == shortCid);
+                if (shortMatch) {
+                    p._cachedServing = shortMatch;
+                    return shortMatch;
+                }
+            }
+            // Loose Match for Names (Case Insensitive + Trim)
+            const looseId = String(cellId).trim().toLowerCase();
+            const s = siteData.find(x => {
+                if (x.cellId == cellId) return true;
+                const matchesName = (x.cellName && String(x.cellName).toLowerCase().trim() === looseId) ||
+                    (x.name && String(x.name).toLowerCase().trim() === looseId);
+                return matchesName;
+            });
+
+            if (s) {
+                p._cachedServing = s; // Cache
+                return s;
+            }
         }
 
+        p._cachedServing = null; // Cache Miss
         return null;
     }
 
@@ -574,7 +631,7 @@ class MapRenderer {
                 const val = this.getMetricValue(p, metric);
 
                 // Handle Identity Metrics Collection for Legend
-                if (metric === 'cellId' || metric === 'cid') {
+                if (metric === 'cellId' || metric === 'cid' || metric === 'Cell ID') {
                     if (val !== undefined && val !== null) {
                         const sVal = String(val);
                         idsCollection.set(sVal, (idsCollection.get(sVal) || 0) + 1);
@@ -585,7 +642,7 @@ class MapRenderer {
 
                 // Collect Stats for Thematic Metrics (RSRP, RSRQ, etc.)
                 // If it's not cellId/cid, it might be a thematic metric mapping to level or quality
-                if (metric !== 'cellId' && metric !== 'cid' && window.getThresholdKey) {
+                if (metric !== 'cellId' && metric !== 'cid' && metric !== 'Cell ID' && window.getThresholdKey) {
                     const rangeKey = window.getThresholdKey(metric);
                     if (rangeKey && window.themeConfig) {
                         const thresholds = window.themeConfig.thresholds[rangeKey];
@@ -667,15 +724,17 @@ class MapRenderer {
                     totalActiveSamples: totalValidsForMetric
                 };
 
-                if (metric === 'cellId' || metric === 'cid') {
-                    this.activeMetricIds = Array.from(idsCollection.keys()).sort(); // Legacy global
+                if (metric === 'cellId' || metric === 'cid' || metric === 'Cell ID') {
+                    this.activeMetricIds = Array.from(idsCollection.keys()).sort(); // Legacy global array
                     this.activeMetricStats = idsCollection;
                     this.totalActiveSamples = totalValidsForMetric;
 
-                    statsObj.activeMetricIds = Array.from(idsCollection.keys()).sort();
+                    statsObj.activeMetricIds = this.activeMetricIds;
 
-                    // Re-render sites to match colors if needed
-                    this.renderSites(false);
+                    // HIGHLIGHT PASS TRIGGER
+                    // Pass the Set of IDs directly for O(1) lookups in renderSites
+                    const activeSet = new Set(idsCollection.keys());
+                    this.renderSites(false, activeSet);
                 } else {
                     // For thematic metrics (level, quality), we also expose stats
                     this.activeMetricStats = idsCollection;
@@ -766,7 +825,7 @@ class MapRenderer {
         console.log(`[MapRenderer] updateLayerMetric: id=${id}, points=${points ? points.length : 0}, metric=${metric}`);
 
         // SYNC SITES SETUP
-        if (metric === 'cellId' || metric === 'cid') {
+        if (metric === 'cellId' || metric === 'cid' || metric === 'Cell ID') {
             // DEFER ID Collection to addLogLayer (Chunked) to avoid freeze
             // this.activeMetricIds will be updated when rendering finishes.
 
@@ -952,7 +1011,14 @@ class MapRenderer {
 
     renderSites(fitBounds = false, activeCellIds = null) {
         if (!activeCellIds && this.activeMetricIds) {
-            activeCellIds = this.activeMetricIds;
+            // SAFEGUARD: activeMetricIds might be an array (legacy) or null
+            if (Array.isArray(this.activeMetricIds)) {
+                activeCellIds = new Set(this.activeMetricIds);
+            } else if (this.activeMetricIds instanceof Set) {
+                activeCellIds = this.activeMetricIds;
+            } else {
+                activeCellIds = null;
+            }
         }
         if (this.sitesLayer) {
             this.map.removeLayer(this.sitesLayer);
@@ -1046,17 +1112,29 @@ class MapRenderer {
                     radiusOffset = 10; // Make it larger
                 }
                 else if (activeCellIds) {
-                    // HIGHLIGHT MODE (KPIs)
+                    // HIGHLIGHT PASS (Dimming Unused Sectors)
+                    // Default to DIMMED
                     color = '#555';
-                    finalOpacity = 0.4;
-                    finalFillOpacity = 0.15;
-                    let idStr = s.cellId;
-                    if (s.rnc && s.cid) idStr = `${s.rnc}/${s.cid}`;
+                    finalOpacity = 0.1;
+                    finalFillOpacity = 0.1; // Faded out
 
-                    if (activeCellIds.includes(String(idStr)) || activeCellIds.includes(String(s.cellId))) {
-                        color = this.getDiscreteColor(idStr);
+                    let idStr = String(s.cellId);
+                    let rncCidStr = null;
+                    if (s.rnc && s.cid) rncCidStr = `${s.rnc}/${s.cid}`;
+
+                    // Check for Match
+                    let isMatch = false;
+                    if (activeCellIds.has(idStr)) isMatch = true;
+                    if (rncCidStr && activeCellIds.has(rncCidStr)) isMatch = true;
+                    // Also check numeric match just in case
+                    if (s.cellId && activeCellIds.has(Number(s.cellId))) isMatch = true;
+
+                    if (isMatch) {
+                        // MATCH: Use Identity Color
+                        color = this.getDiscreteColor(rncCidStr || idStr);
                         finalOpacity = 1;
                         finalFillOpacity = 0.6;
+                        weight = 2;
                     }
                 } else {
                     // STANDARD MODE - use overrideColor if present
