@@ -4783,14 +4783,14 @@ window.updateFloatingInfoPanelMulti = (hits) => {
 
             // Collect Data for Unified Analysis
             aggregatedData.push({
-                name: `Layer: ${log.name}`,
+                name: 'Layer: ' + log.name,
                 data: point.properties ? point.properties : point
             });
 
             // Header for this Log Layer
             const header = document.createElement('div');
-            header.style.cssText = `background:#ef4444; color:#fff; padding:5px; font-weight:bold; font-size:12px; margin-top:${idx > 0 ? '10px' : '0'}; border-radius:4px 4px 0 0;`;
-            header.textContent = `Layer: ${log.name}`;
+            header.style.cssText = 'background:#ef4444; color:#fff; padding:5px; font-weight:bold; font-size:12px; margin-top:' + (idx > 0 ? '10px' : '0') + '; border-radius:4px 4px 0 0;';
+            header.textContent = 'Layer: ' + log.name;
             content.appendChild(header);
 
             // Body Selection
