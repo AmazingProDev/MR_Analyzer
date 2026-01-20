@@ -5077,7 +5077,7 @@ fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    fileStatus.textContent = `Loading ${file.name}...`;
+    fileStatus.textContent = 'Loading ' + file.name + '...';
 
 
     // TRP Zip Import
