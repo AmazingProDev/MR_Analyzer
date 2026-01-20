@@ -4815,14 +4815,13 @@ window.updateFloatingInfoPanelMulti = (hits) => {
         // UNIFIED ANALYZE BUTTON
         const btnContainer = document.createElement('div');
         btnContainer.style.cssText = "margin-top: 15px; text-align: center; border-top: 1px solid #555; padding-top: 10px;";
-        btnContainer.innerHTML = `
-                <button onclick="window.analyzePoint(this)" 
-                        style="background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; width: 100%;">
-                    Analyze All Layers
-                </button>
-                <script type="application/json" id="point-data-stash">${JSON.stringify(aggregatedData)}</script>
-                <script type="application/json" id="point-data-stash-meta">{"hits":true}</script>
-            `;
+        btnContainer.innerHTML = '<button onclick="window.analyzePoint(this)" ' +
+            'style="background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; width: 100%;">' +
+            'Analyze All Layers' +
+            '</button>' +
+            '<script type="application/json" id="point-data-stash">' + JSON.stringify(aggregatedData) + '</script>' +
+            '<script type="application/json" id="point-data-stash-meta">{"hits":true}</script>';
+
         content.appendChild(btnContainer);
 
     } catch (e) {
