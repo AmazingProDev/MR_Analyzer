@@ -5716,20 +5716,19 @@ function showSignalingPayload(point) {
         modal = document.createElement('div');
         modal.id = 'payloadModal';
         modal.className = 'modal';
-        modal.innerHTML = `
-    <div class= "modal-content" style = "max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;" >
-                <div class="modal-header" style="border-bottom: 1px solid #374151; padding: 10px 15px; display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; font-size:16px;">Signaling Details</h3>
-                    <span class="close" onclick="document.getElementById('payloadModal').style.display='none'" style="color:#9ca3af; cursor:pointer; font-size:20px;">&times;</span>
-                </div>
-                <div class="modal-body" style="padding: 15px; max-height: 70vh; overflow-y: auto;">
-                    <div id="payloadContent"></div>
-                </div>
-                <div class="modal-footer" style="padding: 10px 15px; border-top: 1px solid #374151; text-align: right;">
-                     <button onclick="document.getElementById('payloadModal').style.display='none'" class="btn" style="background:#4b5563;">Close</button>
-                </div>
-            </div >
-    `;
+        modal.innerHTML = 
+            '<div class="modal-content" style="max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;">' +
+                '<div class="modal-header" style="border-bottom: 1px solid #374151; padding: 10px 15px; display:flex; justify-content:space-between; align-items:center;">' +
+                    '<h3 style="margin:0; font-size:16px;">Signaling Details</h3>' +
+                    '<span class="close" onclick="document.getElementById(\'payloadModal\').style.display=\'none\'" style="color:#9ca3af; cursor:pointer; font-size:20px;">&times;</span>' +
+                '</div>' +
+                '<div class="modal-body" style="padding: 15px; max-height: 70vh; overflow-y: auto;">' +
+                    '<div id="payloadContent"></div>' +
+                '</div>' +
+                '<div class="modal-footer" style="padding: 10px 15px; border-top: 1px solid #374151; text-align: right;">' +
+                     '<button onclick="document.getElementById(\'payloadModal\').style.display=\'none\'" class="btn" style="background:#4b5563;">Close</button>' +
+                '</div>' +
+            '</div>';
         document.body.appendChild(modal);
     }
 
@@ -5742,32 +5741,27 @@ function showSignalingPayload(point) {
         return str.replace(/(.{4})/g, '$1 ').trim();
     };
 
-    content.innerHTML = `
-    <div style = "margin-bottom: 15px;" >
-            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Message Type</div>
-            <div style="font-size: 14px; color: #fff; font-weight: bold;">${point.message}</div>
-        </div >
-         <div style="display:flex; gap:20px; margin-bottom: 15px;">
-            <div>
-                 <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Time</div>
-                 <div style="color: #d1d5db;">${point.time}</div>
-            </div>
-            <div>
-                 <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Direction</div>
-                 <div style="color: #d1d5db;">${point.direction}</div>
-            </div>
-        </div>
-
-        <div style="background: #111827; padding: 10px; border-radius: 4px; border: 1px solid #374151; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;">
-            <div style="color: #6b7280; margin-bottom: 5px;">RRC Payload (Hex Stream):</div>
-            <div style="color: #10b981; word-break: break-all; white-space: pre-wrap;">${formatHex(payloadRaw)}</div>
-        </div>
-
-         <div style="margin-top: 15px;">
-            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom:5px;">Raw NMF Line</div>
-            <code style="display:block; background:#000; padding:8px; border-radius:4px; font-size:10px; color:#aaa; overflow-x:auto; white-space:nowrap;">${point.details}</code>
-        </div>
-    `;
+    content.innerHTML = 
+        '<div style="margin-bottom: 15px;">' +
+            '<div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Message Type</div>' +
+            '<div style="font-size: 14px; color: #fff; font-weight: bold;">' + point.message + '</div>' +
+        '</div>' +
+        '<div style="display:flex; gap:20px; margin-bottom: 15px;">' +
+             '<div style="flex:1">' +
+                 '<div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Time</div>' +
+                 '<div style="font-size: 13px; color: #e5e7eb;">' + point.time + '</div>' +
+             '</div>' +
+             '<div style="flex:1">' +
+                 '<div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Direction</div>' +
+                 '<div style="font-size: 13px; color: #e5e7eb;">' + point.direction + '</div>' +
+             '</div>' +
+        '</div>' +
+        '<div>' +
+            '<div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom: 5px;">Raw Payload (Hex)</div>' +
+            '<div style="font-family: monospace; background: #111827; padding: 10px; border-radius: 4px; border: 1px solid #374151; color: #10b981; font-size: 12px; white-space: pre-wrap; word-break: break-all;">' +
+                formatHex(payloadRaw) +
+            '</div>' +
+        '</div>';
 
     modal.style.display = 'block';
 }
