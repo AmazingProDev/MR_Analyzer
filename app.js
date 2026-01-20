@@ -5471,7 +5471,7 @@ function addSiteLayerToSidebar(id, name, count) {
     const removeBtn = item.querySelector('.remove-btn');
     removeBtn.onclick = (e) => {
         e.stopPropagation();
-        if (confirm(`Remove site layer "${name}" ? `)) {
+        if (confirm('Remove site layer "' + name + '" ? ')) {
             if (window.mapRenderer) {
                 window.mapRenderer.removeSiteLayer(id);
             }
