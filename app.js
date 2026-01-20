@@ -5063,12 +5063,12 @@ window.addEventListener('site-sector-clicked', (e) => {
     });
 
     if (targetPoints.length > 0) {
-        console.log(`[Spider] Found ${targetPoints.length} points.`);
+        console.log('[Spider] Found ' + targetPoints.length + ' points.');
         window.mapRenderer.drawConnections(startPt, targetPoints);
-        fileStatus.textContent = `Spider: Showing ${targetPoints.length} points for ${sector.cellId || sector.sc}`;
+        fileStatus.textContent = 'Spider: Showing ' + targetPoints.length + ' points for ' + (sector.cellId || sector.sc);
     } else {
         console.warn("[Spider] No matching points found.");
-        fileStatus.textContent = `Spider: No points found for ${sector.cellId || sector.sc}`;
+        fileStatus.textContent = 'Spider: No points found for ' + (sector.cellId || sector.sc);
         window.mapRenderer.clearConnections();
     }
 });
