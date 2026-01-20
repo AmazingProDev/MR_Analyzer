@@ -3158,16 +3158,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.highlightPoint = (logId, index) => {
         // 1. Highlight Grid Row
-        if (window.currentGridLogId === logId) {
-            // efficient removal
-            if (window.lastHighlightedRowIndex !== null && window.lastHighlightedRowIndex !== index) {
-                const oldRow = document.getElementById(`grid-row-${window.lastHighlightedRowIndex}`);
-                if (oldRow) oldRow.classList.remove('selected-row');
-            }
-
-            // efficient addition
-            const row = document.getElementById(`grid-row-${index}`);
-            if (row) {
+    if (window.currentGridLogId === logId) {
+        const row = document.getElementById('grid-row-' + index);
+        if (row) {
                 row.classList.add('selected-row');
                 // Debounce scroll or check if needed? ScrollIntoView is expensive.
                 // Only scroll if strictly necessary? For now, keep it but maybe 'nearest'?
@@ -4894,7 +4887,7 @@ window.globalSync = (logId, index, source, skipPanel = false) => {
 
     // 4. Update Grid
     if (window.currentGridLogId === logId) {
-        const row = document.getElementById(`grid-row-${index}`);
+        const row = document.getElementById('grid-row-' + index);
         if (row) {
             document.querySelectorAll('.grid-row').forEach(r => r.classList.remove('selected-row'));
             row.classList.add('selected-row');
