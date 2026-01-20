@@ -4248,136 +4248,131 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Styles for specific keywords
                 const colorize = (txt) => {
+                    if (!txt) return '';
                     const t = txt.toLowerCase();
-                    if (t === 'good' || t === 'low' || t === 'stable' || t === 'acceptable' || t === 'not congested' || t === 'well utilized' || t === 'effective') return `< span class="status-good" > ${ txt }</span > `;
-                    if (t === 'fair' || t === 'moderate' || t === 'keep') return `< span class="status-fair" > ${ txt }</span > `;
-                    return `< span class="status-poor" > ${ txt }</span > `;
+                    if (t === 'good' || t === 'low' || t === 'stable' || t === 'acceptable' || t === 'not congested' || t === 'well utilized' || t === 'effective') return '<span class="status-good">' + txt + '</span>';
+                    if (t === 'fair' || t === 'moderate' || t === 'keep') return '<span class="status-fair">' + txt + '</span>';
+                    return '<span class="status-poor">' + txt + '</span>';
                 };
 
-                combinedHtml += `
-            < div class="report-section" style = "${idx > 0 ? 'margin-top: 40px; border-top: 4px solid #333; padding-top: 30px;' : ''}" >
-                ${ item.name ? `<h2 style="margin: 0 0 20px 0; color: #60a5fa; border-bottom: 1px solid #444; padding-bottom: 10px; font-size: 18px;">${item.name} Analysis</h2>` : '' }
+                combinedHtml += '<div class="report-section" style="' + (idx > 0 ? 'margin-top: 40px; border-top: 4px solid #333; padding-top: 30px;' : '') + '">' +
+                    (item.name ? '<h2 style="margin: 0 0 20px 0; color: #60a5fa; border-bottom: 1px solid #444; padding-bottom: 10px; font-size: 18px;">' + item.name + ' Analysis</h2>' : '') +
 
-                        <div class="report-block">
-                            <h3 class="report-header">1. Cell Context</h3>
-                            <ul class="report-list">
-                                <li><strong>Technology:</strong> ${context.tech}</li>
-                                <li><strong>Cell Identifier:</strong> ${context.cellId}</li>
-                                <li><strong>Location:</strong> ${context.lat}, ${context.lng}</li>
-                                <li><strong>Data Confidence:</strong> High (based on MR Count)</li>
-                            </ul>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">1. Cell Context</h3>' +
+                    '<ul class="report-list">' +
+                    '<li><strong>Technology:</strong> ' + context.tech + '</li>' +
+                    '<li><strong>Cell Identifier:</strong> ' + context.cellId + '</li>' +
+                    '<li><strong>Location:</strong> ' + context.lat + ', ' + context.lng + '</li>' +
+                    '<li><strong>Data Confidence:</strong> High (based on MR Count)</li>' +
+                    '</ul>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">2. Coverage & Radio Conditions</h3>
-                            <p>Coverage in the analyzed grid is classified as <strong>${colorize(metrics.coverageStatus)}</strong>.</p>
-                            <p>Dominant RSRP indicates <strong>${metrics.coverageInterp}</strong>. 
-                               Signal quality assessment shows <strong>${colorize(metrics.interferenceLevel)}</strong> interference conditions, 
-                               based on Dominant RSRQ and CQI behavior.</p>
-                            <p>Overall radio conditions are assessed as <strong>${colorize(metrics.channelQuality)}</strong>.</p>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">2. Coverage & Radio Conditions</h3>' +
+                    '<p>Coverage in the analyzed grid is classified as <strong>' + colorize(metrics.coverageStatus) + '</strong>.</p>' +
+                    '<p>Dominant RSRP indicates <strong>' + metrics.coverageInterp + '</strong>. ' +
+                    'Signal quality assessment shows <strong>' + colorize(metrics.interferenceLevel) + '</strong> interference conditions, ' +
+                    'based on Dominant RSRQ and CQI behavior.</p>' +
+                    '<p>Overall radio conditions are assessed as <strong>' + colorize(metrics.channelQuality) + '</strong>.</p>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">3. Throughput & User Experience</h3>
-                            <p>Downlink user experience is classified as <strong>${colorize(metrics.dlUserExp)}</strong>.</p>
-                            <p>This is supported by:</p>
-                            <ul class="report-list">
-                                <li>Average DL Throughput behavior</li>
-                                <li>DL Low-Throughput Ratio (${metrics.dlLowThptRatio !== 0 ? metrics.dlLowThptRatio : 'N/A'})</li>
-                                <li>Spectrum Efficiency classification</li>
-                            </ul>
-                            <p>Uplink performance is <strong>acceptable / secondary</strong>, based on UL KPIs.</p>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">3. Throughput & User Experience</h3>' +
+                    '<p>Downlink user experience is classified as <strong>' + colorize(metrics.dlUserExp) + '</strong>.</p>' +
+                    '<p>This is supported by:</p>' +
+                    '<ul class="report-list">' +
+                    '<li>Average DL Throughput behavior</li>' +
+                    '<li>DL Low-Throughput Ratio (' + (metrics.dlLowThptRatio !== 0 ? metrics.dlLowThptRatio : 'N/A') + ')</li>' +
+                    '<li>Spectrum Efficiency classification</li>' +
+                    '</ul>' +
+                    '<p>Uplink performance is <strong>acceptable / secondary</strong>, based on UL KPIs.</p>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">4. Spectrum Efficiency & Resource Utilization</h3>
-                            <p>Downlink spectrum efficiency is classified as <strong>${colorize(metrics.dlSpecPerf)}</strong>.</p>
-                            <p>Average DL RB usage indicates the cell is <strong>${colorize(metrics.cellLoad)}</strong>, 
-                               confirming that performance limitations are <strong>${metrics.congestionInterp}</strong> to congestion.</p>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">4. Spectrum Efficiency & Resource Utilization</h3>' +
+                    '<p>Downlink spectrum efficiency is classified as <strong>' + colorize(metrics.dlSpecPerf) + '</strong>.</p>' +
+                    '<p>Average DL RB usage indicates the cell is <strong>' + colorize(metrics.cellLoad) + '</strong>, ' +
+                    'confirming that performance limitations are <strong>' + metrics.congestionInterp + '</strong> to congestion.</p>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">5. MIMO & Carrier Aggregation Performance</h3>
-                            <p>MIMO utilization is assessed as <strong>${colorize(metrics.mimoUtil)}</strong>, based on rank distribution statistics.</p>
-                            <p>Carrier Aggregation utilization is <strong>${colorize(metrics.caUtil)}</strong>, indicating <strong>${metrics.caInterp}</strong> use of multi-carrier capabilities.</p>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">5. MIMO & Carrier Aggregation Performance</h3>' +
+                    '<p>MIMO utilization is assessed as <strong>' + colorize(metrics.mimoUtil) + '</strong>, based on rank distribution statistics.</p>' +
+                    '<p>Carrier Aggregation utilization is <strong>' + colorize(metrics.caUtil) + '</strong>, indicating <strong>' + metrics.caInterp + '</strong> use of multi-carrier capabilities.</p>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">6. Traffic Profile & Service Impact</h3>
-                            <p>Traffic composition is dominated by:</p>
-                            <ul class="report-list">
-                                <li>QCI 9 (Internet / Default)</li>
-                            </ul>
-                            <p>This traffic profile is sensitive to:</p>
-                            <ul class="report-list">
-                                <li>Throughput stability</li>
-                                <li>Spectrum efficiency</li>
-                                <li>Interference conditions</li>
-                            </ul>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">6. Traffic Profile & Service Impact</h3>' +
+                    '<p>Traffic composition is dominated by:</p>' +
+                    '<ul class="report-list">' +
+                    '<li>QCI 9 (Internet / Default)</li>' +
+                    '</ul>' +
+                    '<p>This traffic profile is sensitive to:</p>' +
+                    '<ul class="report-list">' +
+                    '<li>Throughput stability</li>' +
+                    '<li>Spectrum efficiency</li>' +
+                    '<li>Interference conditions</li>' +
+                    '</ul>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">7. Root Cause Analysis</h3>
-                            <p>Based on rule evaluation, the primary performance limitation(s) are:</p>
-                            <ul class="report-list" style="color: #ef4444; font-weight: bold;">
-                                ${rootCauses.map(rc => `<li>${rc}</li>`).join('')}
-                            </ul>
-                            <p>These limitations explain the observed throughput behavior despite the current load level.</p>
-                        </div>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">7. Root Cause Analysis</h3>' +
+                    '<p>Based on rule evaluation, the primary performance limitation(s) are:</p>' +
+                    '<ul class="report-list" style="color: #ef4444; font-weight: bold;">' +
+                    rootCauses.map(rc => '<li>' + rc + '</li>').join('') +
+                    '</ul>' +
+                    '<p>These limitations explain the observed throughput behavior despite the current load level.</p>' +
+                    '</div>' +
 
-                        <div class="report-block">
-                            <h3 class="report-header">8. Optimization Recommendations</h3>
-                            
-                            <h4 style="color:#fbbf24; margin:10px 0 5px 0;">High Priority Actions:</h4>
-                            <ul class="report-list">
-                                ${recommendations.high.map(a => `<li>${a}</li>`).join('')}
-                            </ul>
+                    '<div class="report-block">' +
+                    '<h3 class="report-header">8. Optimization Recommendations</h3>' +
 
-                            <h4 style="color:#94a3b8; margin:10px 0 5px 0;">Medium Priority Actions:</h4>
-                            <ul class="report-list">
-                                ${recommendations.med.map(a => `<li>${a}</li>`).join('')}
-                            </ul>
-                            
-                            <p style="margin-top:10px; font-style:italic; font-size:11px; color:#888;">Each recommended action is directly linked to the identified root cause(s) and observed KPI behavior.</p>
-                        </div>
-                        
-                        <div class="report-summary">
-                            <h3 class="report-header" style="color:#fff;">EXECUTIVE SUMMARY</h3>
-                            <p>The analyzed LTE cell is primarily <strong>${rootCauses[0]}</strong>, resulting in <strong>${metrics.dlUserExp} User Experience</strong>. Targeted RF and feature optimization is required to improve spectrum efficiency.</p>
-                        </div>
+                    '<h4 style="color:#fbbf24; margin:10px 0 5px 0;">High Priority Actions:</h4>' +
+                    '<ul class="report-list">' +
+                    recommendations.high.map(a => '<li>' + a + '</li>').join('') +
+                    '</ul>' +
 
-                    </div >
-            `;
+                    '<h4 style="color:#94a3b8; margin:10px 0 5px 0;">Medium Priority Actions:</h4>' +
+                    '<ul class="report-list">' +
+                    recommendations.med.map(a => '<li>' + a + '</li>').join('') +
+                    '</ul>' +
+
+                    '<p style="margin-top:10px; font-style:italic; font-size:11px; color:#888;">Each recommended action is directly linked to the identified root cause(s) and observed KPI behavior.</p>' +
+                    '</div>' +
+
+                    '<div class="report-summary">' +
+                    '<h3 class="report-header" style="color:#fff;">EXECUTIVE SUMMARY</h3>' +
+                    '<p>The analyzed LTE cell is primarily <strong>' + rootCauses[0] + '</strong>, resulting in <strong>' + metrics.dlUserExp + ' User Experience</strong>. Targeted RF and feature optimization is required to improve spectrum efficiency.</p>' +
+                    '</div>' +
+
+                    '</div>';
             });
 
             // CSS For Report
-            const style = `
-            < style >
-                    .report - block { margin - bottom: 20px; }
-                    .report - header { color: #aaa; border - bottom: 1px solid #444; padding - bottom: 4px; margin - bottom: 8px; font - size: 14px; text - transform: uppercase; letter - spacing: 0.5px; }
-                    .report - list { padding - left: 20px; color: #ddd; font - size: 13px; line - height: 1.6; }
-                    .report - section p { font - size: 13px; color: #eee; line - height: 1.6; margin - bottom: 8px; }
-                    .status - good { color: #4ade80; font - weight: bold; }
-                    .status - fair { color: #facc15; font - weight: bold; }
-                    .status - poor { color: #f87171; font - weight: bold; }
-                    .report - summary { background: #1f2937; padding: 15px; border - left: 4px solid #3b82f6; margin - top: 30px; }
-                </style >
-            `;
+            const style = '<style>' +
+                '.report-block { margin-bottom: 20px; }' +
+                '.report-header { color: #aaa; border-bottom: 1px solid #444; padding-bottom: 4px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }' +
+                '.report-list { padding-left: 20px; color: #ddd; font-size: 13px; line-height: 1.6; }' +
+                '.report-section p { font-size: 13px; color: #eee; line-height: 1.6; margin-bottom: 8px; }' +
+                '.status-good { color: #4ade80; font-weight: bold; }' +
+                '.status-fair { color: #facc15; font-weight: bold; }' +
+                '.status-poor { color: #f87171; font-weight: bold; }' +
+                '.report-summary { background: #1f2937; padding: 15px; border-left: 4px solid #3b82f6; margin-top: 30px; }' +
+                '</style>';
 
-            const modalHtml = `
-            < div class="analysis-modal-overlay" onclick = "const m=document.querySelector('.analysis-modal-overlay'); if(event.target===m) m.remove()" >
-                <div class="analysis-modal" style="width: 800px; max-width: 90vw;">
-                    <div class="analysis-header">
-                        <h3>Cell Performance Analysis Report</h3>
-                        <button class="analysis-close-btn" onclick="document.querySelector('.analysis-modal-overlay').remove()">×</button>
-                    </div>
-                    <div class="analysis-content" style="padding: 30px;">
-                        ${style}
-                        ${combinedHtml}
-                    </div>
-                </div>
-                </div >
-            `;
+            const modalHtml = '<div class="analysis-modal-overlay" onclick="const m=document.querySelector(\'.analysis-modal-overlay\'); if(event.target===m) m.remove()">' +
+                '<div class="analysis-modal" style="width: 800px; max-width: 90vw;">' +
+                '<div class="analysis-header">' +
+                '<h3>Cell Performance Analysis Report</h3>' +
+                '<button class="analysis-close-btn" onclick="document.querySelector(\'.analysis-modal-overlay\').remove()">×</button>' +
+                '</div>' +
+                '<div class="analysis-content" style="padding: 30px;">' +
+                style +
+                combinedHtml +
+                '</div>' +
+                '</div>' +
+                '</div>';
 
             // Append to body
             const div = document.createElement('div');
