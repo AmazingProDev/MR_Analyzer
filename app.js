@@ -4612,44 +4612,41 @@ document.addEventListener('DOMContentLoaded', () => {
             sClickAction = 'onclick="window.highlightAndPan(' + servingRes.lat + ', ' + servingRes.lng + ', \'' + safeId + '\', \'serving\')" style="cursor:pointer; color:#fff;"';
         }
 
-// Serving Row
-rows += `
-            <tr class="log-row serving-row">
-                <td class="log-cell-type">Serving</td>
-                <td class="log-cell-name"><span class="log-header-serving" ${sClickAction}>${sName}</span> <span style="color:#666; font-size:10px;">(${identityLabel})</span></td>
-                <td class="log-cell-val">${sSC}</td>
-                <td class="log-cell-val">${sRSCP}</td>
-                <td class="log-cell-val">${sEcNo}</td>
-                <td class="log-cell-val">${sFreq}</td>
-            </tr>
-        `;
+        // Serving Row
+        rows += '<tr class="log-row serving-row">' +
+            '<td class="log-cell-type">Serving</td>' +
+            '<td class="log-cell-name"><span class="log-header-serving" ' + sClickAction + '>' + sName + '</span> <span style="color:#666; font-size:10px;">(' + identityLabel + ')</span></td>' +
+            '<td class="log-cell-val">' + sSC + '</td>' +
+            '<td class="log-cell-val">' + sRSCP + '</td>' +
+            '<td class="log-cell-val">' + sEcNo + '</td>' +
+            '<td class="log-cell-val">' + sFreq + '</td>' +
+            '</tr>';
 
-neighbors.forEach(n => {
-    let nIdLabel = `${n.sc}/${n.freq}`;
-    if (n.rnc && n.cid) nIdLabel = `${n.rnc}/${n.cid}`;
+        neighbors.forEach(n => {
+            let nIdLabel = n.sc + '/' + n.freq;
+            if (n.rnc && n.cid) nIdLabel = n.rnc + '/' + n.cid;
 
-    let nClickAction = '';
-    /* FIX: Use highlightAndPan */
-    if (n.lat && n.lng) {
-        const safeId = n.id || (n.rnc && n.cid ? `${n.rnc}/${n.cid}` : '');
-        nClickAction = `onclick="window.highlightAndPan(${n.lat}, ${n.lng}, '${safeId}', 'neighbor')" style="cursor:pointer;"`;
-    }
+            let nClickAction = '';
+            /* FIX: Use highlightAndPan */
+            if (n.lat && n.lng) {
+                const safeId = n.id || (n.rnc && n.cid ? n.rnc + '/' + n.cid : '');
+                nClickAction = 'onclick="window.highlightAndPan(' + n.lat + ', ' + n.lng + ', \'' + safeId + '\', \'neighbor\')" style="cursor:pointer;"';
+            }
 
-    rows += `
-                <tr class="log-row">
-                    <td class="log-cell-type">${n.type}</td>
-                    <td class="log-cell-name"><span ${nClickAction}>${n.name}</span> <span style="color:#666; font-size:10px;">(${nIdLabel})</span></td>
-                    <td class="log-cell-val">${n.sc}</td>
-                    <td class="log-cell-val">${n.rscp}</td>
-                    <td class="log-cell-val">${n.ecno}</td>
-                    <td class="log-cell-val">${n.freq}</td>
-                </tr>
-            `;
-});
+            rows += '<tr class="log-row">' +
+                '<td class="log-cell-type">' + n.type + '</td>' +
+                '<td class="log-cell-name"><span ' + nClickAction + '>' + n.name + '</span> <span style="color:#666; font-size:10px;">(' + nIdLabel + ')</span></td>' +
+                '<td class="log-cell-val">' + n.sc + '</td>' +
+                '<td class="log-cell-val">' + n.rscp + '</td>' +
+                '<td class="log-cell-val">' + n.ecno + '</td>' +
+                '<td class="log-cell-val">' + n.freq + '</td>' +
+                '</tr>';
+        });
 
-// ----------------------------------------------------
-// EXTRACT OTHER METRICS
-// ----------------------------------------------------
+        // ----------------------------------------------------
+        // EXTRACT OTHER METRICS
+        // ----------------------------------------------------
+
 let extraMetricsHtml = '';
 const sourceObj = p.properties ? p.properties : p;
 const knownKeys = ['lat', 'lng', 'time', 'id', 'geometry', 'properties', 'parsed',
