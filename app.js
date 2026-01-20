@@ -5855,7 +5855,7 @@ function updateDockedLayout() {
         [dockedChart, dockedSignaling, dockedGrid].forEach(el => {
             // Ensure flex basis is reasonable
             el.style.flex = '1 1 auto';
-            el.style.width = `${width} % `;
+            el.style.width = width + '%';
             el.style.borderRight = '1px solid #444';
             el.style.height = '100%'; // Full height of bottomPanel
         });
