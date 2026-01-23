@@ -59,6 +59,46 @@ const NMFParser = {
                             state.cid = (rnc.val << 16) + cid.val;
                         }
                     }
+
+                    // --- NEW: Event 1A Config Extraction (Heuristic) ---
+                    // Pattern in user log: ... 3.0,100,5.0,1280,0.5,100 ...
+                    // Mapping Hypothesis: Hysteresis, RSCP_Thresh, Range, TTT, ?, ?
+                    // We look for the sequence of float, int/float, float, 1280/640/320 
+                    for (let x = 10; x < parts.length - 5; x++) {
+                        const v1 = parseFloat(parts[x]);
+                        const v2 = parseFloat(parts[x + 1]);
+                        const v3 = parseFloat(parts[x + 2]);
+                        const v4 = parseInt(parts[x + 3]);
+                        const v5 = parseFloat(parts[x + 4]);
+                        const v6 = parseFloat(parts[x + 5]);
+
+                        // Check for TTT characteristic values (1280, 640, 320, 160)
+                        if (!isNaN(v1) && !isNaN(v3) && [1280, 640, 320, 160, 100, 200].includes(v4)) {
+                            // Valid candidate sequence
+                            if (v1 >= 0 && v1 <= 10 && v3 >= 0 && v3 <= 10) {
+                                // Initialize history if needed
+                                if (!this.event1AHistory) this.event1AHistory = [];
+
+                                // Capture entry
+                                this.event1AHistory.push({
+                                    time: time,
+                                    hysteresis: v1,
+                                    thresholdRSCP: v2,
+                                    range: v3,
+                                    timeToTrigger: v4,
+                                    filterCoef: v5,
+                                    thresholdEcNo: v6,
+                                    rawValues: [v1, v2, v3, v4, v5, v6, parseFloat(parts[x + 6]), parseFloat(parts[x + 7])],
+                                    maxActiveSet: 3 // Default
+                                });
+
+                                // Keep legacy single config for backward compatibility/summary
+                                if (!this.detected1AConfig) {
+                                    this.detected1AConfig = this.event1AHistory[0];
+                                }
+                            }
+                        }
+                    }
                 } else if (tech === 7) {
                     // LTE
                     if (parts.length > 10) {
@@ -358,7 +398,14 @@ const NMFParser = {
             }
         }
 
-        return { points: measurementPoints, signaling: signalingPoints, events: eventPoints, tech: detectedTech };
+        return {
+            points: measurementPoints,
+            signaling: signalingPoints,
+            events: eventPoints,
+            tech: detectedTech,
+            config: this.detected1AConfig || null,
+            configHistory: this.event1AHistory || []
+        };
     }
 
 };
@@ -386,8 +433,8 @@ const ExcelParser = {
         const normalize = k => k.toLowerCase().replace(/[\s_]/g, '');
 
         let timeKey = keys.find(k => /^(time|timestamp|date|datetime)$/i.test(normalize(k)) || /time/i.test(normalize(k))); // Prioritize exact, then loose
-        let latKey = keys.find(k => /^(lat|latitude|y_coord|y)$/i.test(normalize(k)));
-        let lngKey = keys.find(k => /^(lon|long|longitude|lng|x_coord|x)$/i.test(normalize(k)));
+        let latKey = keys.find(k => /^(lat|latitude|y_coord|y|cgpslat|cgpslatitude)$/i.test(normalize(k)) || /latitude/i.test(normalize(k)));
+        let lngKey = keys.find(k => /^(lon|long|longitude|lng|x_coord|x|cgpslon|cgpslongitude)$/i.test(normalize(k)) || /longitude/i.test(normalize(k)));
 
         // 2. Identify Metrics (Include All Keys as requested)
         const customMetrics = [...keys]; // User wants EVERY column to be a metric

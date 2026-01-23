@@ -822,6 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let allPoints = [];
             let allSignaling = [];
+            let detectedConfig = null;
 
             for (const logFile of channelLogs) {
                 try {
@@ -841,6 +842,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             console.log('[TRP] Parsed ' + (parserResult.points.length) + ' points from ' + (logFile.name));
                             allPoints = allPoints.concat(parserResult.points);
                             allSignaling = allSignaling.concat(parserResult.signaling);
+                            if (parserResult.config && !detectedConfig) detectedConfig = parserResult.config;
                         }
                     } else {
                         console.warn('[TRP] Skipping binary log: ' + (logFile.name));
@@ -879,7 +881,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 color: '#8b5cf6', // Violet
                 visible: true,
                 type: 'nmf', // Treat as NMF-like standard log
-                currentParam: 'level'
+                currentParam: 'level',
+                config: detectedConfig
             };
 
             loadedLogs.push(newLog);
@@ -3847,7 +3850,125 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
-    // --- ANALYSIS ENGINE ---
+    // --- ANALYSIS ENGINE & CONFIGURATION ---
+
+    // 1. Default Thresholds (The Source of Truth)
+    const defaultAnalysisThresholds = {
+        coverage: {
+            rsrp: { good: -90, fair: -100 }, // >= -90 Good, > -100 Fair
+            rscp: { good: -85, fair: -95 }
+        },
+        quality: {
+            rsrq: { good: -9, degraded: -11 }, // >= -9 Good, > -11 Degraded
+            ecno: { good: -8, degraded: -12 },
+            cqi: { good: 9, moderate: 6 }
+        },
+        userExp: {
+            dlLowThptRatio: { severe: 80, degraded: 25 }, // >= 80 Severe, >= 25 Degraded
+            ulLowThptRatio: 0 // Binary check usually
+        },
+        load: {
+            prb: { congested: 80, moderate: 70, low: 10 } // >= 80 Congested, < 70 Moderate, <= 10 Very Low
+        },
+        spectral: {
+            eff: { low: 2000, veryLow: 1000 } // < 2000 Low, < 1000 Very Low
+        },
+        stability: {
+            bler: { unstable: 20, degraded: 10 } // > 20 Unstable, > 10 Degraded. (Logic inverted in code: <=10 Stable)
+        },
+        mimo: {
+            rank2: { good: 30, limited: 15 } // >= 30 Good, >= 15 Limited
+        }
+    };
+
+    // 2. Initialize Global State (Load from LocalStorage or Default)
+    window.analysisThresholds = JSON.parse(localStorage.getItem('mr_analyzer_thresholds')) || JSON.parse(JSON.stringify(defaultAnalysisThresholds));
+
+    // 3. Helper to Save
+    window.saveAnalysisThresholds = () => {
+        localStorage.setItem('mr_analyzer_thresholds', JSON.stringify(window.analysisThresholds));
+        console.log('Thresholds saved:', window.analysisThresholds);
+    };
+
+    // 4. Helper to Reset
+    window.resetAnalysisThresholds = () => {
+        window.analysisThresholds = JSON.parse(JSON.stringify(defaultAnalysisThresholds));
+        window.saveAnalysisThresholds();
+        // Refresh UI if open
+        if (document.getElementById('analysisSettingsForm')) {
+            window.openAnalysisSettings();
+        }
+    };
+
+    // 5. Settings Modal UI
+    window.openAnalysisSettings = () => {
+        const t = window.analysisThresholds;
+
+        // Helper to create input row
+        const row = (label, path, val, tooltip) => `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <label style="flex:1; font-size:12px; color:#ccc;" title="${tooltip}">${label}</label>
+                <input type="number" step="1" value="${val}" 
+                    onchange="updateThreshold('${path}', this.value)"
+                    style="width:60px; background:#333; border:1px solid #555; color:#fff; padding:2px 5px; border-radius:3px;">
+            </div>
+        `;
+
+        const html = `
+            <div class="analysis-modal-overlay analysis-settings-overlay" onclick="if(event.target===this) this.remove()">
+                <div class="analysis-modal" style="width: 500px; max-width: 90vw; background:#1f2937; border:1px solid #374151;">
+                    <div class="analysis-header" style="background:#111827; padding:15px; border-bottom:1px solid #374151; display:flex; justify-content:space-between; align-items:center;">
+                        <h3 style="margin:0; color:#fff;">Analysis Thresholds</h3>
+                        <div style="display:flex; gap:10px;">
+                            <button onclick="window.resetAnalysisThresholds()" style="background:#555; color:#fff; border:none; padding:4px 8px; border-radius:3px; font-size:11px; cursor:pointer;">Reset Defaults</button>
+                            <button class="analysis-close-btn" onclick="this.closest('.analysis-modal-overlay').remove()" style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer;">×</button>
+                        </div>
+                    </div>
+                    <div id="analysisSettingsForm" class="analysis-content" style="padding: 20px; overflow-y:auto; max-height:70vh; color:#eee;">
+                        
+                        <h4 style="border-bottom:1px solid #444; padding-bottom:5px; margin-top:0;">Coverage (Good / Fair)</h4>
+                        ${row('RSRP Good (>=)', 'coverage.rsrp.good', t.coverage.rsrp.good, 'Signal Level required to be considered Good')}
+                        ${row('RSRP Fair (>)', 'coverage.rsrp.fair', t.coverage.rsrp.fair, 'Signal Level required to be considered Fair')}
+                        
+                        <h4 style="border-bottom:1px solid #444; padding-bottom:5px; margin-top:15px;">Quality (Good / Degraded)</h4>
+                        ${row('RSRQ Good (>=)', 'quality.rsrq.good', t.quality.rsrq.good, 'Signal Quality required to be considered Good')}
+                        ${row('RSRQ Degraded (>)', 'quality.rsrq.degraded', t.quality.rsrq.degraded, 'Signal Quality required to be considered Degraded')}
+                        ${row('CQI Good (>=)', 'quality.cqi.good', t.quality.cqi.good, 'CQI required to be considered Good')}
+                        ${row('CQI Moderate (>=)', 'quality.cqi.moderate', t.quality.cqi.moderate, 'CQI required to be considered Moderate')}
+
+                        <h4 style="border-bottom:1px solid #444; padding-bottom:5px; margin-top:15px;">User Experience</h4>
+                        ${row('DL Low Thpt Ratio - Severe (>=)', 'userExp.dlLowThptRatio.severe', t.userExp.dlLowThptRatio.severe, '% Samples with Low Throughput to be considered Severe')}
+                        ${row('DL Low Thpt Ratio - Degraded (>=)', 'userExp.dlLowThptRatio.degraded', t.userExp.dlLowThptRatio.degraded, '% Samples with Low Throughput to be considered Degraded')}
+
+                        <h4 style="border-bottom:1px solid #444; padding-bottom:5px; margin-top:15px;">Cell Load (PRB Usage)</h4>
+                        ${row('Congested (>=)', 'load.prb.congested', t.load.prb.congested, 'Average DL PRB Usage to be considered Congested')}
+                        ${row('Moderate (<)', 'load.prb.moderate', t.load.prb.moderate, 'Average DL PRB Usage to be considered Moderate')}
+                        ${row('Very Low (<=)', 'load.prb.low', t.load.prb.low, 'Average DL PRB Usage to be considered Very Low')}
+
+                    </div>
+                    <div style="padding:15px; background:#111827; border-top:1px solid #374151; text-align:right;">
+                        <button onclick="document.querySelector('.analysis-settings-overlay').remove();" style="background:#2563eb; color:white; border:none; padding:6px 15px; border-radius:4px; cursor:pointer;">Done</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        document.body.appendChild(div.firstElementChild);
+
+        // Global Updater for Inputs
+        window.updateThreshold = (path, value) => {
+            const keys = path.split('.');
+            let obj = window.analysisThresholds;
+            for (let i = 0; i < keys.length - 1; i++) {
+                obj = obj[keys[i]];
+            }
+            obj[keys[keys.length - 1]] = parseFloat(value);
+            window.saveAnalysisThresholds();
+        };
+    };
+
 
     function analyzeSmartCarePoint(data) {
         // --- Safe KPI extractor ---
@@ -3859,6 +3980,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (nk === na || nk.includes(na)) {
                         const v = parseFloat(data[k]);
                         if (!Number.isNaN(v)) return v;
+                    }
+                }
+            }
+            return null;
+        };
+
+        // --- Safe String extractor ---
+        const getStringVal = (...aliases) => {
+            for (const a of aliases) {
+                const na = a.toLowerCase().replace(/[\s\-_()%]/g, '');
+                for (const k in data) {
+                    const nk = k.toLowerCase().replace(/[\s\-_()%]/g, '');
+                    if (nk === na || nk.includes(na)) {
+                        return data[k];
                     }
                 }
             }
@@ -3898,50 +4033,67 @@ document.addEventListener('DOMContentLoaded', () => {
             maxDlThp: getVal('maximum dl throughput')
         };
 
-        // --- Status ---
-        const status = {};
+        const identity = {
+            enbName: getStringVal('eNodeB Name', 'eNodeBName', 'Site Name'),
+            enbId: getStringVal('eNodeB ID-Cell ID', 'eNodeB ID - Cell ID', 'Cell ID')
+        };
 
+        // --- Status (Using Configured Thresholds) ---
+        const status = {};
+        const T = window.analysisThresholds;
+
+        // Coverage
         if (kpi.rsrp !== null) {
             status.coverage =
-                kpi.rsrp >= -90 ? 'Good' :
-                    kpi.rsrp > -100 ? 'Fair' : 'Poor';
+                kpi.rsrp >= T.coverage.rsrp.good ? 'Good' :
+                    kpi.rsrp > T.coverage.rsrp.fair ? 'Fair' : 'Poor';
         }
 
+        // Quality
         if (kpi.rsrq !== null) {
             status.signalQuality =
-                kpi.rsrq >= -9 ? 'Good' :
-                    kpi.rsrq > -11 ? 'Degraded' : 'Poor';
+                kpi.rsrq >= T.quality.rsrq.good ? 'Good' :
+                    kpi.rsrq > T.quality.rsrq.degraded ? 'Degraded' : 'Poor';
         }
 
         if (kpi.cqi !== null) {
             status.channelQuality =
-                kpi.cqi >= 9 ? 'Good' :
-                    kpi.cqi >= 6 ? 'Moderate' : 'Poor';
+                kpi.cqi >= T.quality.cqi.good ? 'Good' :
+                    kpi.cqi >= T.quality.cqi.moderate ? 'Moderate' : 'Poor';
         }
 
+        // User Experience
         if (kpi.dlLow !== null) {
             status.dlUserExperience =
-                kpi.dlLow >= 80 ? 'Severely Degraded' :
-                    kpi.dlLow >= 25 ? 'Degraded' : 'Acceptable';
+                kpi.dlLow >= T.userExp.dlLowThptRatio.severe ? 'Severely Degraded' :
+                    kpi.dlLow >= T.userExp.dlLowThptRatio.degraded ? 'Degraded' : 'Acceptable';
+
+            // Add binary check for UL if needed
+            // if (kpi.ulLow !== null && kpi.ulLow > 0) ...
         }
 
+        // Load
         if (kpi.dlRB !== null) {
             status.load =
-                kpi.dlRB <= 10 ? 'Very Low Load' :
-                    kpi.dlRB < 70 ? 'Moderate Load' : 'Congested';
+                kpi.dlRB <= T.load.prb.low ? 'Very Low Load' :
+                    kpi.dlRB < T.load.prb.moderate ? 'Moderate Load' : 'Congested';
+
+            // Adjust to match user expectation: Congested if >= configured value
+            if (kpi.dlRB >= T.load.prb.congested) status.load = 'Congested';
         }
 
+        // Spectral Efficiency
         if (kpi.dlSpecEff !== null) {
             status.spectralEfficiency =
-                kpi.dlSpecEff < 1000 ? 'Very Low' :
-                    kpi.dlSpecEff < 2000 ? 'Low' : 'Normal';
+                kpi.dlSpecEff < T.spectral.eff.veryLow ? 'Very Low' :
+                    kpi.dlSpecEff < T.spectral.eff.low ? 'Low' : 'Normal';
         }
 
-        // --- MIMO Status ---
+        // MIMO Status
         if (kpi.rank2Pct !== null) {
             status.mimo =
-                kpi.rank2Pct >= 30 ? 'Good' :
-                    kpi.rank2Pct >= 15 ? 'Limited' : 'Poor';
+                kpi.rank2Pct >= T.mimo.rank2.good ? 'Good' :
+                    kpi.rank2Pct >= T.mimo.rank2.limited ? 'Limited' : 'Poor';
         }
 
         // --- Rank Dominance ---
@@ -3965,8 +4117,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- BLER Status (Link Stability) ---
         if (kpi.dlBler !== null) {
             status.dlLink =
-                kpi.dlBler <= 10 ? 'Stable' :
-                    kpi.dlBler <= 20 ? 'Degraded' : 'Unstable';
+                kpi.dlBler <= T.stability.bler.degraded ? 'Stable' :
+                    kpi.dlBler <= T.stability.bler.unstable ? 'Degraded' : 'Unstable';
         }
 
         // --- Interpretation ---
@@ -4095,9 +4247,11 @@ document.addEventListener('DOMContentLoaded', () => {
             diagnosis,
             actions,
             confidence,
-            throughputRootCauses
+            throughputRootCauses,
+            identity
         };
     }
+    window.analyzeSmartCarePoint = analyzeSmartCarePoint;
 
     function explainCoverage(status, kpi) {
         if (!status.coverage) return 'Coverage data unavailable.';
@@ -4249,6 +4403,8 @@ document.addEventListener('DOMContentLoaded', () => {
             </style>
 
             <h3>📍 LTE Cell Performance Analysis</h3>
+            ${result.identity && result.identity.enbName ? `<div style="color:#e5e7eb; font-size:14px; margin-bottom:4px;"><b>eNodeB:</b> ${result.identity.enbName}</div>` : ''}
+            ${result.identity && result.identity.enbId ? `<div style="color:#9ca3af; font-size:13px; margin-bottom:15px;"><b>ID:</b> ${result.identity.enbId}</div>` : ''}
 
             <h4>1️⃣ Data Confidence Assessment</h4>
             <ul>
@@ -4343,6 +4499,70 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
+
+
+    // --- Helper for Sampling SmartCare Layers ---
+    // --- Helper for Sampling SmartCare Layers ---
+    window.findNearestSmartCarePointAndLog = (targetLat, targetLng) => {
+        let bestMatch = null;
+        let minDist = 0.005; // approx 500m
+
+        // Helper: safe coordinate access
+        const getCoord = (p, keys) => {
+            for (const k of keys) {
+                if (p[k] !== undefined) return parseFloat(p[k]);
+            }
+            return null;
+        };
+
+        loadedLogs.forEach(log => {
+            if (!log.points || log.points.length === 0) return;
+            if (log.type === 'excel' && log.name.includes('Rabat')) return;
+
+            log.points.forEach((p, index) => {
+                const lat = getCoord(p, ['lat', 'latitude', 'Latitude', 'LAT', 'y', 'y_coord']);
+                const lng = getCoord(p, ['lng', 'longitude', 'Longitude', 'LONG', 'x', 'x_coord']);
+
+                if (lat === null || lng === null) return;
+
+                const dLat = lat - targetLat;
+                const dLng = lng - targetLng;
+                const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestMatch = { point: p, logId: log.id, index: index, dist: dist, logName: log.name };
+                }
+            });
+        });
+
+        return bestMatch;
+    };
+
+    window.findNearestSmartCareAnalysis = (targetLat, targetLng) => {
+        const match = window.findNearestSmartCarePointAndLog(targetLat, targetLng);
+        if (match) {
+            return window.analyzeSmartCarePoint(match.point);
+        }
+        return null;
+    };
+
+    // OLD FUNCTION STUB TO BE REMOVED (kept to match closing brace later if needed, but we handle it by creating new funcs)
+    // Actually we are replacing the start of the old function.
+    // We need to consume the OLD function body or comment it out?
+    // If we just put the new functions here, the rest of the file (lines 4508+) will be syntax error.
+    // We MUST replace the whole block.
+
+    // Let's try matching the header and commenting out the rest? No.
+    // I will try to match the WHOLE block one last time with looser constraints?
+    // No, I'll match the header and replace it with `window.findNearestSmartCareAnalysis = (targetLat, targetLng) => { /* New Code */ }; //` and try to comment out the old body?
+    // That's messy.
+
+    // BACKTRACK: I will use `multi_replace_file_content` to replace 4505-4539.
+    // I will read it carefully one more time.
+
+
+
     window.analyzePoint = (btn) => {
         try {
             let script = document.getElementById('point-data-stash');
@@ -4371,7 +4591,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="analysis-modal" style="width: 600px; max-width: 90vw;">
                         <div class="analysis-header" style="background:#2563eb;">
                             <h3>Cell Performance Analysis</h3>
-                            <button class="analysis-close-btn" onclick="this.closest('.analysis-modal-overlay').remove()">×</button>
+                            <div style="display:flex; gap:10px;">
+                                <button onclick="window.openAnalysisSettings()" style="background:#374151; color:#ccc; border:1px solid #555; padding:4px 8px; border-radius:3px; cursor:pointer; font-size:12px;">⚙ Settings</button>
+                                <button class="analysis-close-btn" onclick="this.closest('.analysis-modal-overlay').remove()">×</button>
+                            </div>
                         </div>
                         <div id="analysis-output" class="analysis-content" style="padding: 25px; background: #111827; color: #eee;">
                             <!-- Renderer content goes here -->
@@ -4952,11 +5175,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 '</div>';
         }
 
+        // --- NEW: Extract eNodeB Specific Fields ---
+        let enbNameDisplay = '';
+        let enbIdDisplay = '';
+
+        if (p.properties) {
+            const getVal = (candidates) => {
+                const keys = Object.keys(p.properties);
+                for (const c of candidates) {
+                    const match = keys.find(k => k.toLowerCase() === c.toLowerCase());
+                    if (match) return p.properties[match];
+                }
+                return null;
+            };
+            const rawName = getVal(['eNodeB Name', 'eNodeBName']);
+            if (rawName) enbNameDisplay = `<div style="font-size:11px; color:#e5e7eb;"><b>eNB:</b> ${rawName}</div>`;
+
+            const rawId = getVal(['eNodeB ID-Cell ID', 'eNodeB ID - Cell ID']);
+            if (rawId) enbIdDisplay = `<div style="font-size:11px; color:#e5e7eb;"><b>ID:</b> ${rawId}</div>`;
+        }
+
         const html = '<div class="log-view-container">' +
             '<div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:5px;">' +
             '<div>' +
             '<div class="log-header-serving" style="font-size:14px; margin-bottom:2px;">' + sName + '</div>' +
-            '<div style="color:#aaa; font-size:11px;">Lat: ' + p.lat.toFixed(6) + '  Lng: ' + p.lng.toFixed(6) + '</div>' +
+            enbNameDisplay +
+            enbIdDisplay +
+            '<div style="color:#aaa; font-size:11px; margin-top:2px;">Lat: ' + p.lat.toFixed(6) + '  Lng: ' + p.lng.toFixed(6) + '</div>' +
             '</div>' +
             '<div style="color:#aaa; font-size:11px;">' + (p.time || '') + '</div>' +
             '</div>' +
@@ -5221,6 +5466,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const { logId, point, source } = e.detail;
 
         const log = loadedLogs.find(l => l.id === logId);
+
+        // --- PROBE REDIRECTION: Click on Rabat Excel -> Click on SmartCare ---
+        if (log && log.type === 'excel' && point['Analyze point'] && window.findNearestSmartCarePointAndLog) {
+            const probed = window.findNearestSmartCarePointAndLog(point.lat, point.lng);
+            if (probed) {
+                console.log(`[Interaction] Redirecting click from ${logId} to SmartCare ${probed.logId}`);
+                // Hijack: Sync the SmartCare point instead
+                window.globalSync(probed.logId, probed.index, source || 'map');
+                return;
+            }
+        }
+
         if (log) {
             // Prioritize ID match
             let index = -1;
@@ -5450,6 +5707,52 @@ document.addEventListener('DOMContentLoaded', () => {
             const signalingData = !Array.isArray(result) ? result.signaling : [];
             const eventsData = !Array.isArray(result) ? result.events : [];
             const customMetrics = !Array.isArray(result) ? result.customMetrics : []; // New for Excel
+            const configData = !Array.isArray(result) ? result.config : null;
+            const configHistory = !Array.isArray(result) ? result.configHistory : [];
+
+            // --- AUTO ANALYSIS: Analyze all points immediately ---
+            if (window.analyzeSmartCarePoint && parsedData && parsedData.length > 0) {
+                console.log("Running Auto-Analysis on " + parsedData.length + " points...");
+                parsedData.forEach(p => {
+                    // 1. Try Sampling from existing SmartCare Grid
+                    let analysis = null;
+                    if (window.findNearestSmartCareAnalysis && p.lat && p.lng) {
+                        analysis = window.findNearestSmartCareAnalysis(p.lat, p.lng);
+                    }
+
+                    // 2. Fallback: Self-Analysis
+                    if (!analysis) {
+                        analysis = window.analyzeSmartCarePoint(p);
+                    }
+
+                    // Comprehensive Result for "Analyze point" column
+                    // Comprehensive Result for "Analyze point" column
+                    const parts = [];
+
+                    // Always include Status Overview if available
+                    if (analysis.status) {
+                        const s = analysis.status;
+                        const statusSummary = [];
+                        if (s.coverage) statusSummary.push(`Coverage: ${s.coverage}`);
+                        if (s.signalQuality) statusSummary.push(`Quality: ${s.signalQuality}`);
+                        if (s.load && s.load !== 'Normal') statusSummary.push(`Load: ${s.load}`);
+                        if (statusSummary.length > 0) parts.push(statusSummary.join(', '));
+                    }
+
+                    if (analysis.diagnosis && analysis.diagnosis.length) parts.push("Diagnosis: " + analysis.diagnosis.join(', '));
+                    if (analysis.interpretation && analysis.interpretation.length) parts.push("Interpretation: " + analysis.interpretation.join('; '));
+                    if (analysis.throughputRootCauses && analysis.throughputRootCauses.length) parts.push("Causes: " + analysis.throughputRootCauses.join('; '));
+                    if (analysis.actions && analysis.actions.length) parts.push("Actions: " + analysis.actions.join('; '));
+
+                    const fullResult = parts.length > 0 ? parts.join(' | ') : 'Normal / No Issues Detected';
+                    p['Analyze point'] = fullResult;
+                });
+
+                // Add to metrics tracking if not present
+                if (customMetrics && !customMetrics.includes('Analyze point')) {
+                    customMetrics.push('Analyze point');
+                }
+            }
 
             console.log('Parsed ' + parsedData.length + ' measurement points and ' + (signalingData ? signalingData.length : 0) + ' signaling messages.Tech: ' + technology);
 
@@ -5468,7 +5771,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     customMetrics: customMetrics,
                     color: getRandomColor(),
                     visible: true,
-                    currentParam: 'level'
+                    currentParam: 'level',
+                    config: configData,
+                    configHistory: configHistory
                 });
 
                 // Update UI
@@ -6361,6 +6666,21 @@ document.addEventListener('DOMContentLoaded', () => {
             stats.innerHTML =
                 '<span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">' + log.tech + '</span>' +
                 '<span style="margin-left:5px;">' + count + ' pts</span>';
+
+            // --- NEW: Detected Config Display (Event 1A) ---
+            if (log.config) {
+                const c = log.config;
+                const configDiv = document.createElement('div');
+                configDiv.style.cssText = 'margin-top:5px; padding:5px; background:#1f2937; border-radius:3px; font-size:10px; color:#9ca3af; border-left:2px solid #6ee7b7;';
+
+                let configHtml = '<div style="margin-bottom:2px; font-weight:bold; color:#6ee7b7;">Handover (SHO / IFHO) parameters</div>';
+
+                // Button to open Grid
+                configHtml += '<button onclick="window.showEvent1AGrid(\'' + log.id + '\')" style="margin-top:5px; width:100%; font-size:10px; padding:3px; background:#374151; border:1px solid #4b5563; color:#e5e7eb; cursor:pointer; border-radius:2px;">Event 1A – Add cell to Active Set</button>';
+
+                configDiv.innerHTML = configHtml;
+                stats.appendChild(configDiv);
+            }
 
             // Actions
             const actions = document.createElement('div');
@@ -7335,3 +7655,104 @@ window.showAnalysisModal = (content, title) => {
     if (overlay) overlay.style.display = 'flex'; // Assuming flex for overlay centering
     modal.style.display = 'block';
 };
+
+
+window.showEvent1AGrid = function (logId) {
+    const log = loadedLogs.find(l => l.id === logId);
+    if (!log) return;
+
+    // Use history if available, else fallback to single config
+    const history = log.configHistory && log.configHistory.length > 0 ? log.configHistory : (log.config ? [log.config] : []);
+
+    const existing = document.querySelector('.event1a-modal-overlay');
+    if (existing) existing.remove();
+
+    // Helper to find point and pan map
+    window.locateEvent1A = function (timeStr) {
+        if (!timeStr || timeStr === 'N/A') return;
+        // Find point with this time
+        const point = log.points.find(p => p.time === timeStr);
+        if (point) {
+            // Pan map
+            if (window.map) {
+                window.map.setView([point.lat, point.lng], 18);
+                // Optional: Create a temporary popup or marker
+                L.popup()
+                    .setLatLng([point.lat, point.lng])
+                    .setContent(`<b>Event 1A Point</b><br>Time: ${timeStr}`)
+                    .openOn(window.map);
+            }
+        } else {
+            console.warn('Point not found for time:', timeStr);
+        }
+    };
+
+    let rowsHtml = '';
+    history.forEach(item => {
+        const timeVal = item.time || 'N/A';
+        const cursorStyle = timeVal !== 'N/A' ? 'cursor:pointer;' : '';
+        const hoverEffect = timeVal !== 'N/A' ? 'onmouseover="this.style.background=\'#4b5563\'" onmouseout="this.style.background=\'\'" onclick="window.locateEvent1A(\'' + timeVal + '\')"' : '';
+
+        // Map old 'threshold' to 'thresholdRSCP' if legacy
+        const rscpThresh = item.thresholdRSCP ?? item.threshold ?? '-';
+        const ecnoThresh = item.thresholdEcNo ?? '-';
+
+        rowsHtml += `
+            <tr style="border-bottom:1px solid #374151; transition:background 0.2s; ${cursorStyle}" ${hoverEffect}>
+                <td style="padding:8px; font-size:12px; color:#d1d5db;">${timeVal}</td>
+                <td style="padding:8px; font-size:12px; font-weight:bold; color:#fff;">${item.range ?? '-'} <span style="font-size:10px; font-weight:normal; color:#9ca3af;">dB</span></td>
+                <td style="padding:8px; font-size:12px; font-weight:bold; color:#fff;">${item.hysteresis ?? '-'} <span style="font-size:10px; font-weight:normal; color:#9ca3af;">dB</span></td>
+                <td style="padding:8px; font-size:12px; font-weight:bold; color:#fff;">${item.timeToTrigger ?? '-'} <span style="font-size:10px; font-weight:normal; color:#9ca3af;">ms</span></td>
+                <td style="padding:8px; font-size:12px; font-weight:bold; color:#fff;">${rscpThresh}</td>
+                <td style="padding:8px; font-size:12px; font-weight:bold; color:#fff;">${ecnoThresh}</td>
+                <td style="padding:8px; font-size:10px; color:#d1d5db; max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${item.rawValues ? item.rawValues.join(', ') : ''}">${item.rawValues ? item.rawValues.join(', ') : '-'}</td>
+                <td style="padding:8px; font-size:12px; font-weight:bold; color:#fff;">${item.maxActiveSet ?? '3'}</td>
+            </tr>
+        `;
+    });
+
+    const html = `
+            <div class="event1a-modal-overlay" style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index:9999;" onclick="if(event.target===this) this.remove()">
+                <div style="background:#1f2937; color:#f3f4f6; padding:20px; border-radius:8px; width:600px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 4px 6px rgba(0,0,0,0.3);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom:1px solid #374151; padding-bottom:10px;">
+                        <h3 style="margin:0; font-size:16px;">Event 1A – Add cell to Active Set (History)</h3>
+                        <button onclick="this.closest('.event1a-modal-overlay').remove()" style="background:none; border:none; color:#9ca3af; font-size:18px; cursor:pointer;">×</button>
+                    </div>
+                    
+                    <div style="color:#9ca3af; font-size:12px; margin-bottom:10px;">
+                        * Click on a row to locate the configuration point on the map.
+                    </div>
+
+                    <div style="overflow-y:auto; flex:1;">
+                        <table style="width:100%; border-collapse:collapse; text-align:left;">
+                            <thead>
+                                <tr style="background:#374151; position:sticky; top:0;">
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Time</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Ec/No Range</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Hysteresis</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Time to Trigger</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">RSCP Thresh</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Ec/No Thresh</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Raw Params (Debug)</th>
+                                    <th style="padding:8px; font-size:11px; color:#9ca3af; font-weight:normal;">Max AS</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div style="margin-top:20px; text-align:right; border-top:1px solid #374151; padding-top:10px;">
+                        <button onclick="this.closest('.event1a-modal-overlay').remove()" style="padding:6px 16px; background:#2563eb; color:white; border:none; border-radius:4px; cursor:pointer;">Close</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+};
+
+
