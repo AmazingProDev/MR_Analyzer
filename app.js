@@ -23,6 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const m = metric.toLowerCase();
         if (m.includes('qual') || m.includes('sinr') || m.includes('ecno')) return 'quality';
         if (m.includes('throughput')) return 'throughput';
+        if (m.includes('bler')) return 'bler';
+        if (m.includes('rscp') || m.includes('rsrp') || m.includes('level') || m === 'rssi' || m.includes('tx power')) return 'level';
         return 'level'; // Default to level (RSRP/RSCP)
     };
 
@@ -47,6 +49,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 { min: 3000, max: 10000, color: '#eab308', label: 'Fair (3000-10000 Kbps)' },
                 { min: 1000, max: 3000, color: '#f97316', label: 'Poor (1000-3000 Kbps)' },
                 { min: undefined, max: 1000, color: '#ef4444', label: 'Bad (< 1000 Kbps)' }
+            ],
+            'bler': [
+                { min: undefined, max: 2, color: '#22c55e', label: 'Good (< 2%)' },
+                { min: 2, max: 10, color: '#eab308', label: 'Fair (2-10%)' },
+                { min: 10, max: undefined, color: '#ef4444', label: 'Bad (> 10%)' }
             ]
 
         }
@@ -331,14 +338,47 @@ document.addEventListener('DOMContentLoaded', () => {
             item.classList.toggle('expanded');
         };
 
-        const metricsHtml = (customMetrics && customMetrics.length > 0)
-            ? '<div class="sc-metric-container">\n' +
-            customMetrics.map(m =>
-                '<div class="sc-metric-button ' + (log.currentParam === m ? 'active' : '') + '"' +
-                ' onclick="window.showMetricOptions(event, \'' + layerId + '\', \'' + m + '\', \'smartcare\')">' + m + '</div>'
-            ).join('') + '\n' +
-            '</div>'
-            : '<div style="font-size:10px; color:#666; font-style:italic;">No metrics found</div>';
+        let metricsHtml = '<div style="font-size:10px; color:#666; font-style:italic;">No metrics found</div>';
+
+        if (customMetrics && customMetrics.length > 0) {
+            // Group Metrics
+            const groups = {
+                'Standard': [],
+                'Active Set': [],
+                'Monitored Set': [],
+                'Detected Set': []
+            };
+
+            customMetrics.forEach(m => {
+                const lower = m.toLowerCase();
+                if (/^a\d+_/.test(lower)) groups['Active Set'].push(m);
+                else if (/^m\d+_/.test(lower)) groups['Monitored Set'].push(m);
+                else if (/^d\d+_/.test(lower)) groups['Detected Set'].push(m);
+                else groups['Standard'].push(m);
+            });
+
+            metricsHtml = '<div class="sc-metric-container" style="display:flex; flex-direction:column; gap:5px;">';
+
+            Object.keys(groups).forEach(groupName => {
+                const list = groups[groupName];
+                if (list.length === 0) return;
+
+                metricsHtml += `
+                    <div class="sc-metric-group">
+                        <div style="font-size:10px; font-weight:bold; color:#888; margin-bottom:2px; text-transform:uppercase;">${groupName}</div>
+                        <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                            ${list.map(m => `
+                                <div class="sc-metric-button ${log.currentParam === m ? 'active' : ''}" 
+                                     onclick="window.showMetricOptions(event, '${layerId}', '${m}', 'smartcare')">
+                                     ${m}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>`;
+            });
+
+            metricsHtml += '</div>';
+        }
 
         item.innerHTML = '\n' +
             '            <div class="sc-group-title-row">\n' +
@@ -3071,22 +3111,39 @@ document.addEventListener('DOMContentLoaded', () => {
             let rowsHtml = '';
             const limit = 5000; // Limit for performance
 
-            log.points.slice(0, limit).forEach((p, i) => {
+            // Filtering: If the main column is an event/failure, filter points that actually have that data
+            const mainCol = window.currentGridColumns[0];
+            const eventMetrics = ['RLF indication', 'UL sync loss (UE can’t reach NodeB)', 'DL sync loss (Interference / coverage)', 'T310', 'T312', 'Call Drop', 'AS Event', 'HO Command', 'HO Completion'];
+
+            let pointsToRender = log.points;
+            if (eventMetrics.includes(mainCol)) {
+                pointsToRender = log.points.filter(p => p.properties && p.properties[mainCol] !== undefined);
+            }
+
+            pointsToRender.slice(0, limit).forEach((p, i) => {
                 // Add ID and Click Handler
                 // RNC/CID Formatter
                 const rncCid = (p.rnc !== undefined && p.rnc !== null && p.cid !== undefined && p.cid !== null)
                     ? (p.rnc) + '/' + (p.cid)
                     : (p.cellId || '-');
 
+                const latVal = (p.lat !== null && p.lat !== undefined) ? p.lat.toFixed(5) : '-';
+                const lngVal = (p.lng !== null && p.lng !== undefined) ? p.lng.toFixed(5) : '-';
+
                 let row = '<tr id="grid-row-' + (i) + '" class="grid-row" onclick="window.globalSync(\'' + (log.id) + '\', ' + (i) + ', \'grid\')" style="cursor:pointer; transition: background 0.1s;">\n' +
                     '                <td style="padding:4px 8px; border-bottom:1px solid #333;">' + (p.time) + '</td>\n' +
-                    '                <td style="padding:4px 8px; border-bottom:1px solid #333;">' + (p.lat.toFixed(5)) + '</td>\n' +
-                    '                <td style="padding:4px 8px; border-bottom:1px solid #333;">' + (p.lng.toFixed(5)) + '</td>\n' +
+                    '                <td style="padding:4px 8px; border-bottom:1px solid #333;">' + (latVal) + '</td>\n' +
+                    '                <td style="padding:4px 8px; border-bottom:1px solid #333;">' + (lngVal) + '</td>\n' +
                     '                <td style="padding:4px 8px; border-bottom:1px solid #333;">' + (rncCid) + '</td>';
 
                 window.currentGridColumns.forEach(col => {
                     if (col === 'cellId') return; // Skip cellId
                     let val = p[col];
+
+                    // Fallback to properties if not at root (for new RLF events)
+                    if (val === undefined && p.properties) {
+                        val = p.properties[col];
+                    }
 
                     // Handling complex parsing access
                     if (col.startsWith('n') && col.includes('_')) {
@@ -3129,6 +3186,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (col === 'freq' && (val === undefined || val === null)) {
                             val = p.freq;
                         }
+                    }
+
+                    // Properties Fallback (Crucial for "Serving RSCP", "Serving SC", etc.)
+                    if (val === undefined && p.properties && p.properties[col] !== undefined) {
+                        val = p.properties[col];
                     }
 
                     // Special formatting for Cell ID in Grid
@@ -3504,6 +3566,11 @@ document.addEventListener('DOMContentLoaded', () => {
             window.currentGridColumns.forEach(col => {
                 let val = p[col];
 
+                // Fallback to properties if not at root
+                if (val === undefined && p.properties) {
+                    val = p.properties[col];
+                }
+
                 // --- Logic mirrored from renderGrid ---
                 // Neighbors
                 if (col.startsWith('n') && col.includes('_')) {
@@ -3818,6 +3885,7 @@ document.addEventListener('DOMContentLoaded', () => {
             '                <div style="display:flex; flex-wrap:wrap; gap:5px; margin-top:10px;">\n' +
             '                    <button class="btn btn-blue" onclick="window.analyzePoint(this)" style="flex:1; justify-content: center; min-width: 120px;">Analyze Point</button>\n' +
             '                    <button class="btn btn-green" onclick="window.deepAnalyzePoint(this)" style="flex:1; justify-content: center; min-width: 120px;">Deep Analyze</button>\n' +
+            '                    <button class="btn btn-orange" onclick="window.throughputAnalysis(this)" style="flex:1; justify-content: center; min-width: 120px; background-color: #ea580c; color: white;">Throughput Analysis</button>\n' +
             '                    <button class="btn btn-purple" onclick="window.generateManagementSummary()" style="flex:1; justify-content: center; min-width: 120px;">MANAGEMENT</button>\n' +
             '                </div>\n' +
             '                    <!-- Hidden data stash for the analyzer -->\n' +
@@ -4292,7 +4360,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function explainDLUserExperience(status, kpi) {
         if (!status.dlUserExperience) return 'DL experience data unavailable.';
         const lowRatio = kpi.dlLow !== null ? `Low-throughput ratio: ${kpi.dlLow}%` : '';
-        const thpInfo = kpi.avgDlThp !== null ? `Avg Thp: ${Math.round(kpi.avgDlThp)} Kbps, Max: ${Math.round(kpi.maxDlThp || 0)} Kbps` : '';
+        const thpInfo = kpi.avgDlThp !== null ? `Avg Thp: ${(kpi.avgDlThp / 1000).toFixed(2)} Mbps, Max: ${((kpi.maxDlThp || 0) / 1000).toFixed(2)} Mbps` : '';
         const details = [lowRatio, thpInfo].filter(x => x).join(' | ');
 
         if (status.dlUserExperience === 'Degraded' || status.dlUserExperience === 'Severely Degraded') {
@@ -4313,7 +4381,107 @@ document.addEventListener('DOMContentLoaded', () => {
     function explainSpectralEfficiency(status, kpi) {
         if (!status.spectralEfficiency) return 'Spectral efficiency data unavailable.';
         const val = kpi.dlSpecEff !== null ? `(${kpi.dlSpecEff} bps/Hz)` : '';
-        if (status.spectralEfficiency === 'Low' || status.spectralEfficiency === 'Very Low') {
+        if (status.spectralEfficiency === 'Very Low') {
+            // Convert Kbps/MHz to bps/Hz (divide by 1000)
+            const valBpsHz = (kpi.dlSpecEff / 1000).toFixed(2);
+            return `DL spectrum efficiency is critically low (${valBpsHz} bps/Hz), indicating severe radio inefficiency caused by retransmissions, poor MIMO utilization, and/or interference. Corrective actions should prioritize BLER reduction, MIMO optimization, and scheduler tuning. Performance must be validated after corrective measures.
+
+            <div style="margin-top:10px;">
+                <h5 style="color:#fcd34d; font-size:14px; margin-bottom:10px;">🧠 What This Means (Diagnosis)</h5>
+                <p style="color:#ddd; font-size:12px; margin-bottom:10px;">
+                    With very low spectrum efficiency, the cell:
+                </p>
+                <ul style="margin:5px 0 15px 15px; color:#ddd;">
+                    <li>Consumes radio resources but delivers little data</li>
+                    <li>Suffers from inefficient modulation, spatial multiplexing, or retransmissions</li>
+                    <li>Is constrained by radio quality, MIMO, or scheduler behavior</li>
+                </ul>
+
+                <p style="color:#eee; font-size:12px; margin-bottom:15px;">
+                    <strong>📉 Typical healthy DL SE:</strong><br>
+                    • Good cell: 1.5–3.0 bps/Hz<br>
+                    • Acceptable: ≥ 1.0 bps/Hz<br>
+                    • Critical: < 0.7 bps/Hz<br>
+                    ➡️ ${valBpsHz} bps/Hz = Critical radio degradation
+                </p>
+
+                <h5 style="color:#fcd34d; font-size:14px; margin-bottom:10px; cursor:pointer; user-select:none;" onclick="const el = this.nextElementSibling; el.style.display = el.style.display === 'none' ? 'block' : 'none';">🛠️ Corrective Actions (Prioritized) 🔽</h5>
+                <div style="display:none;">
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 1 — Reduce BLER & Retransmissions (Top Driver)</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Stop wasting RBs</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Tune DL BLER target (less aggressive)</li>
+                        <li>Optimize CQI → MCS mapping</li>
+                        <li>Reduce use of high-order modulation under unstable SINR</li>
+                        <li>Investigate HARQ retransmission rates</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 High BLER is the fastest way to destroy spectrum efficiency.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 2 — Improve MIMO Utilization</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Increase bits per RB</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Investigate Rank-1 dominance</li>
+                        <li>Inspect antenna & feeder health</li>
+                        <li>Improve cross-polarization isolation</li>
+                        <li>Enable / optimize beamforming</li>
+                        <li>Tune rank switching thresholds</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Without Rank-2+, SE will remain low regardless of CA.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 3 — Interference Mitigation</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Improve SINR</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Optimize antenna tilt & azimuth</li>
+                        <li>Reduce overshooting cells</li>
+                        <li>Tune ICIC / eICIC</li>
+                        <li>Re-evaluate neighbor dominance</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Poor RSRQ/SINR directly limits achievable MCS.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                    <strong style="color:#fdba74;">🟠 Priority 4 — Scheduler Optimization</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Use RBs efficiently</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Tune proportional-fair scheduler</li>
+                        <li>Avoid over-allocating RBs to poor-SINR UEs</li>
+                        <li>Balance GBR vs non-GBR traffic</li>
+                        <li>Enable CA-aware scheduling</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Scheduler inefficiency amplifies radio problems.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                    <strong style="color:#fdba74;">🟠 Priority 5 — Carrier Aggregation & Band Alignment</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Maximize usable bandwidth efficiency</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Ensure CA is active and utilized</li>
+                        <li>Align PCell and SCell coverage</li>
+                        <li>Remove overly strict SCell addition thresholds</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 CA improves throughput, but also stabilizes SE when used correctly.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #eab308; padding-left:10px;">
+                    <strong style="color:#fde047;">🟡 Priority 6 — Hardware & Parameter Audit</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Eliminate hidden losses</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Check RRU output power balance</li>
+                        <li>Verify VSWR / feeder losses</li>
+                        <li>Audit recent parameter changes</li>
+                        <li>Roll back mis-tuned features if needed</li>
+                    </ul>
+                </div>
+                </div>
+            </div>`;
+        }
+        if (status.spectralEfficiency === 'Low') {
             return `Low spectrum efficiency ${val} indicates radio limitations rather than traffic demand.`;
         }
         return `Spectrum efficiency ${val} is within expected range.`;
@@ -4338,6 +4506,101 @@ document.addEventListener('DOMContentLoaded', () => {
             return `CA is active but ineffective due to poor secondary carrier quality. ${ccInfo}.`;
         }
         if (status.ca === 'Underutilized') {
+            if ((kpi.dl1cc || 0) >= 100) {
+                return `Carrier Aggregation is underutilized. ${ccInfo}. 
+                <div style="margin-top:5px;">
+                    <h5 style="color:#fcd34d; font-size:14px; margin-bottom:10px;">🧠 What This Means (Diagnosis)</h5>
+                    <p style="color:#ddd; font-size:12px; margin-bottom:10px;">
+                        When 1CC = 100% and multi-CC = 0%, it indicates one or more of the following:
+                    </p>
+                    <ul style="margin:5px 0 15px 15px; color:#ddd;">
+                        <li>CA is misconfigured or inactive</li>
+                        <li>Inter-frequency mobility is failing</li>
+                        <li>UE capability or band combination is not matched</li>
+                        <li>Secondary Cell (SCell) addition conditions are not met</li>
+                        <li>Radio quality thresholds prevent CA activation</li>
+                    </ul>
+
+                    <p style="color:#f87171; font-size:12px; margin-bottom:15px;">
+                        <strong>📉 Impact:</strong> Peak/Avg throughput severely limited. Poor spectrum utilization.
+                    </p>
+
+                    <h5 style="color:#fcd34d; font-size:14px; margin-bottom:10px; cursor:pointer; user-select:none;" onclick="const el = this.nextElementSibling; el.style.display = el.style.display === 'none' ? 'block' : 'none';">🛠️ Corrective Actions (Prioritized) 🔽</h5>
+                    <div style="display:none;">
+
+                    <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                        <strong style="color:#f87171;">🔴 Priority 1 — CA Configuration Verification (Mandatory)</strong><br>
+                        <span style="font-size:12px; color:#bbb;">Goal: Ensure CA is technically possible</span>
+                        <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                            <li>Verify CA is enabled on the eNodeB</li>
+                            <li>Confirm PCell–SCell band combinations are correctly configured</li>
+                            <li>Check license availability for CA</li>
+                            <li>Ensure SCells are not barred or deactivated</li>
+                            <li>Validate bandwidth configuration on all carriers</li>
+                        </ul>
+                        <span style="font-size:12px; color:#86efac;">📌 Most common root cause in the field.</span>
+                    </div>
+
+                    <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                        <strong style="color:#f87171;">🔴 Priority 2 — Inter-Frequency & SCell Addition Conditions</strong><br>
+                        <span style="font-size:12px; color:#bbb;">Goal: Allow UEs to activate CA</span>
+                        <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                            <li>Review SCell addition thresholds (RSRP / RSRQ / SINR)</li>
+                            <li>Relax overly strict A3 / event-based conditions</li>
+                            <li>Check inter-frequency neighbor relations</li>
+                            <li>Ensure X2/S1 signaling stability for SCell control</li>
+                        </ul>
+                        <span style="font-size:12px; color:#86efac;">📌 Overly conservative thresholds silently kill CA.</span>
+                    </div>
+
+                    <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                        <strong style="color:#fdba74;">🟠 Priority 3 — Radio Quality Alignment Across Carriers</strong><br>
+                        <span style="font-size:12px; color:#bbb;">Goal: Make secondary carriers usable</span>
+                        <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                            <li>Compare RSRP/RSRQ of PCell vs SCells</li>
+                            <li>Optimize tilt & power balance between carriers</li>
+                            <li>Reduce interference on higher-frequency bands</li>
+                            <li>Align coverage footprints across bands</li>
+                        </ul>
+                        <span style="font-size:12px; color:#86efac;">📌 CA fails if SCells are significantly weaker than PCell.</span>
+                    </div>
+
+                    <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                        <strong style="color:#fdba74;">🟠 Priority 4 — UE Capability & Traffic Conditions</strong><br>
+                        <span style="font-size:12px; color:#bbb;">Goal: Confirm demand and capability exist</span>
+                        <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                            <li>Analyze UE category distribution</li>
+                            <li>Verify supported CA band combinations in the UE base</li>
+                            <li>Confirm sufficient DL traffic volume (CA won’t trigger on very low traffic)</li>
+                            <li>Validate CA is enabled in UE capability signaling</li>
+                        </ul>
+                        <span style="font-size:12px; color:#86efac;">📌 CA will not activate for low-category or idle UEs.</span>
+                    </div>
+
+                    <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                        <strong style="color:#fdba74;">🟠 Priority 5 — Scheduler & Feature Interaction</strong><br>
+                        <span style="font-size:12px; color:#bbb;">Goal: Ensure scheduler allows CA usage</span>
+                        <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                            <li>Verify CA-aware scheduler is enabled</li>
+                            <li>Check GBR/QCI impact (real-time traffic can block CA)</li>
+                            <li>Ensure load-balancing policies don’t pin UEs to PCell</li>
+                            <li>Review feature conflicts (e.g., legacy ICIC settings)</li>
+                        </ul>
+                    </div>
+
+                    <div style="margin-bottom:15px; border-left:3px solid #eab308; padding-left:10px;">
+                        <strong style="color:#fde047;">🟡 Priority 6 — Software, Alarms & Stability</strong><br>
+                        <span style="font-size:12px; color:#bbb;">Goal: Detect hidden failures</span>
+                        <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                            <li>Check CA-related alarms or counters (SCell add/remove failures)</li>
+                            <li>Review recent software upgrades or parameter changes</li>
+                            <li>Apply recommended vendor patches</li>
+                            <li>Monitor SCell addition success rate</li>
+                        </ul>
+                    </div>
+                    </div>
+                </div>`;
+            }
             return `Carrier Aggregation is underutilized. ${ccInfo}. Possible configuration or traffic demand issue.`;
         }
         return `Carrier Aggregation is effective. ${ccInfo}. Multi-carrier scheduling is performing well.`;
@@ -4345,12 +4608,206 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function explainLinkStability(status, kpi) {
         if (!status.dlLink) return 'Link stability data unavailable.';
-        const blerInfo = `BLER: DL=${kpi.dlBler || 0}%, UL=${kpi.ulBler || 0}%`;
+        const blerInfo = `BLER: DL=${(kpi.dlBler || 0).toFixed(2)}%, UL=${(kpi.ulBler || 0).toFixed(2)}%`;
+
         if (status.dlLink === 'Unstable') {
             return `Radio link is unstable due to high BLER. ${blerInfo}. Expect frequent retransmissions.`;
         }
+
         if (status.dlLink === 'Degraded') {
-            return `Radio link quality is degraded. ${blerInfo}. Performance may be inconsistent.`;
+            const T = window.analysisThresholds;
+            const degradedThresh = (T && T.stability && T.stability.bler && T.stability.bler.degraded) ? T.stability.bler.degraded : 10;
+            const isUlDegraded = (kpi.ulBler || 0) > degradedThresh;
+
+            let baseMsg = `Radio link quality is degraded. ${blerInfo}. Performance may be inconsistent.`;
+
+            // Display detailed actions ONLY if UL is NOT degraded (i.e. DL-specific issue)
+            if (!isUlDegraded) {
+                return baseMsg + `<br>
+            Corrective actions should prioritize interference mitigation, MCS tuning, and MIMO stability improvements. Monitoring post-optimization is required to confirm BLER normalization.
+            
+            <div style="margin-top:15px; padding-top:15px; border-top:1px solid #444;">
+                <h5 style="color:#fcd34d; font-size:14px; margin-bottom:10px; cursor:pointer; user-select:none;" onclick="const el = this.nextElementSibling; el.style.display = el.style.display === 'none' ? 'block' : 'none';">🛠️ Corrective Actions (Prioritized) 🔽</h5>
+                <div style="display:none;">
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 1 — Radio & Interference Stabilization</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Reduce DL retransmissions</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Optimize antenna tilt and azimuth to reduce interference overlap</li>
+                        <li>Review neighbor cell dominance & overshooting</li>
+                        <li>Enable or tune ICIC / eICIC</li>
+                        <li>Check RSRQ & SINR distributions for interference patterns</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected impact: Immediate BLER reduction</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 2 — Link Adaptation & MCS Control</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Prevent overly aggressive modulation</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Increase DL BLER target margin</li>
+                        <li>Tune CQI → MCS mapping</li>
+                        <li>Limit high-order modulation (64QAM / 256QAM) in poor SINR conditions</li>
+                        <li>Enable conservative MCS fallback for unstable links</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected impact: Stabilizes throughput, fewer HARQ retries</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                    <strong style="color:#fdba74;">🟠 Priority 3 — MIMO & Spatial Stability</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Improve spatial channel reliability</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Investigate Rank-1 dominance</li>
+                        <li>Inspect antenna cross-polarization</li>
+                        <li>Enable / optimize beamforming</li>
+                        <li>Verify RRU & antenna health (VSWR, feeder loss)</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected impact: Improves DL BLER and throughput simultaneously</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                    <strong style="color:#fdba74;">🟠 Priority 4 — Mobility & Fast Fading Control</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Reduce transient BLER spikes</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Optimize handover margins & TTT</li>
+                        <li>Tune DL outer-loop power control</li>
+                        <li>Adjust scheduler behavior for high-speed UEs</li>
+                        <li>Enable robust retransmission settings</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected impact: Improves user experience for moving users</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #eab308; padding-left:10px;">
+                    <strong style="color:#fde047;">🟡 Priority 5 — Scheduler & Resource Handling</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Avoid BLER amplification under load</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Tune proportional-fair scheduler weights</li>
+                        <li>Reduce aggressive scheduling for poor SINR users</li>
+                        <li>Balance GBR vs non-GBR traffic</li>
+                        <li>Avoid excessive RB assignment during unstable radio</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected impact: Reduces wasted RBs due to retransmissions</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #3b82f6; padding-left:10px;">
+                    <strong style="color:#93c5fd;">🔵 Priority 6 — Monitoring & Validation</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Confirm improvement and prevent recurrence</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Track BLER vs CQI vs Rank</li>
+                        <li>Correlate BLER with RSRQ / SINR</li>
+                        <li>Re-evaluate after peak traffic hours</li>
+                        <li>Set BLER alarms (DL > 10%)</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected impact: Sustained stability</span>
+                </div>
+                </div>
+            </div>`;
+            }
+            // Fallback for when UL IS also degraded (or no data)
+            // If UL is also degraded, show the specific dual-link degradation message
+            if (isUlDegraded) {
+                return `The radio link is critically degraded. ${blerInfo}. This indicates unstable channel conditions and potential RF/interference or hardware issues. Immediate actions should focus on RF integrity checks, interference mitigation, and conservative link adaptation tuning. Performance validation is required post-optimization.
+                
+                <h5 style="color:#fcd34d; font-size:14px; margin-top:15px; margin-bottom:10px;">🧠 What This Situation Means (Diagnosis)</h5>
+                <ul style="margin:5px 0 15px 15px; color:#ddd;">
+                    <li><b>Poor radio channel stability</b></li>
+                    <li>High interference or fast fading</li>
+                    <li>Power control and link adaptation issues</li>
+                    <li>Possible antenna / RF hardware degradation</li>
+                </ul>
+
+                <h5 style="color:#fcd34d; font-size:14px; margin-bottom:10px; cursor:pointer; user-select:none;" onclick="const el = this.nextElementSibling; el.style.display = el.style.display === 'none' ? 'block' : 'none';">🛠️ Corrective Actions (Strict Priority Order) 🔽</h5>
+                <div style="display:none;">
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 1 — RF Integrity & Hardware Health (MANDATORY)</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Eliminate physical-layer faults</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Perform antenna, feeder, and jumper inspection</li>
+                        <li>Check VSWR / return loss</li>
+                        <li>Verify RRU output power stability</li>
+                        <li>Confirm UL receiver sensitivity</li>
+                        <li>Inspect MIMO port balance</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Why critical: Hardware issues are the #1 cause when DL and UL BLER are both high.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 2 — Interference & Noise Floor Reduction</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Improve SINR in both directions</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Optimize antenna tilt & azimuth</li>
+                        <li>Identify and mitigate overshooting cells</li>
+                        <li>Review neighbor dominance</li>
+                        <li>Enable or retune ICIC / eICIC</li>
+                        <li>Investigate external interference sources</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Why: UL BLER > 10% almost always implies high noise or interference.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #ef4444; padding-left:10px;">
+                    <strong style="color:#f87171;">🔴 Priority 3 — Link Adaptation & Power Control</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Stabilize transmissions</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Increase DL & UL BLER target margins</li>
+                        <li>Tune CQI → MCS mapping (reduce aggressive MCS)</li>
+                        <li>Optimize UL power control parameters</li>
+                        <li>Limit high-order modulation under unstable SINR</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Expected effect: Immediate BLER reduction at the cost of slightly lower peak rates (acceptable).</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                    <strong style="color:#fdba74;">🟠 Priority 4 — MIMO & Spatial Stability</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Improve channel robustness</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Check Rank-1 dominance</li>
+                        <li>Optimize MIMO switching thresholds</li>
+                        <li>Enable / optimize beamforming</li>
+                        <li>Validate antenna cross-polarization isolation</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Why: Unstable spatial channels amplify BLER in both DL & UL.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #f97316; padding-left:10px;">
+                    <strong style="color:#fdba74;">🟠 Priority 5 — Mobility & Fast-Fading Control</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Reduce transient radio failures</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Optimize handover margins and TTT</li>
+                        <li>Reduce ping-pong handovers</li>
+                        <li>Tune scheduler for high-speed UEs</li>
+                        <li>Enable robust HARQ settings</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Why: Mobility-induced fading impacts DL and UL equally.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #eab308; padding-left:10px;">
+                    <strong style="color:#fde047;">🟡 Priority 6 — Scheduler & Resource Discipline</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Goal: Avoid BLER amplification</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>Avoid aggressive RB allocation to poor SINR UEs</li>
+                        <li>Tune PF scheduler fairness</li>
+                        <li>Reduce retransmission storms</li>
+                        <li>Balance GBR vs non-GBR traffic</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">📌 Why: Over-scheduling bad radio links worsens BLER.</span>
+                </div>
+
+                <div style="margin-bottom:15px; border-left:3px solid #3b82f6; padding-left:10px;">
+                    <strong style="color:#93c5fd;">📊 Validation & Monitoring (Required)</strong><br>
+                    <span style="font-size:12px; color:#bbb;">Monitor After Actions:</span>
+                    <ul style="margin:5px 0 5px 15px; color:#ddd;">
+                        <li>DL & UL BLER trends (target < 8%)</li>
+                        <li>BLER vs SINR distribution</li>
+                        <li>Rank-2+ usage</li>
+                        <li>HARQ retransmission rate</li>
+                    </ul>
+                    <span style="font-size:12px; color:#86efac;">Alarm Recommendation: DL BLER > 10%, UL BLER > 8%</span>
+                </div></div>`;
+            }
+
+            return baseMsg;
         }
         return `Radio link is stable. ${blerInfo}. Link adaptation is performing optimally.`;
     }
@@ -4426,7 +4883,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <p>${explainCQI(status, kpi)}</p>
 
             <h4>5️⃣ Downlink User Experience</h4>
-            <p><b>DL Experience:</b> <span style="color:${getStatusColor(status.dlUserExperience)}">${status.dlUserExperience || 'Unknown'}</span></p>
+            <p><b>DL Experience:</b> <span style="color:${status.dlUserExperience === 'Degraded' ? '#ef4444' : getStatusColor(status.dlUserExperience)}">${status.dlUserExperience || 'Unknown'}</span></p>
             <p>${explainDLUserExperience(status, kpi)}</p>
 
             <h4>6️⃣ Load & Capacity</h4>
@@ -4434,7 +4891,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <p>${explainLoad(status, kpi)}</p>
 
             <h4>7️⃣ Spectrum Efficiency</h4>
-            <p><b>Spectral Efficiency:</b> <span style="color:${getStatusColor(status.spectralEfficiency)}">${status.spectralEfficiency || 'Unknown'}</span></p>
+            <p><b>Spectral Efficiency:</b> <span style="color:${status.spectralEfficiency === 'Very Low' ? '#ef4444' : getStatusColor(status.spectralEfficiency)}">${status.spectralEfficiency || 'Unknown'}</span></p>
             <p>${explainSpectralEfficiency(status, kpi)}</p>
 
             <h4>8️⃣ MIMO Performance</h4>
@@ -4446,7 +4903,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <p>${explainCA(status, kpi)}</p>
 
             <h4>🔟 Link Stability (BLER)</h4>
-            <p><b>Link Status:</b> <span style="color:${getStatusColor(status.dlLink)}">${status.dlLink || 'N/A'}</span></p>
+            <p><b>Link Status:</b> <span style="color:${status.dlLink === 'Degraded' ? '#ef4444' : getStatusColor(status.dlLink)}">${status.dlLink || 'N/A'}</span></p>
             <p>${explainLinkStability(status, kpi)}</p>
 
             <h4>1️⃣1️⃣ Interpretation (WHY)</h4>
@@ -5054,7 +5511,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     rscp: n.rscp !== undefined ? n.rscp : -140, // Default low for sort
                     ecno: n.ecno !== undefined ? n.ecno : '-',
                     freq: n.freq !== undefined ? n.freq : '-',
-                    cellName: n.cellName
+                    cellName: n.cellName,
+                    type: n.type // Capture type from parser (A2, M1...)
                 });
             });
         }
@@ -5077,7 +5535,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const neighbors = rawNeighbors.map((n, i) => {
             const resolved = resolveN(n.sc, n.freq, n.cellName);
             return {
-                type: 'N' + (i + 1),
+                type: n.type || ('N' + (i + 1)),
                 name: resolved.name,
                 rnc: resolved.rnc,
                 cid: resolved.cid,
@@ -5123,8 +5581,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 nClickAction = 'onclick="window.highlightAndPan(' + n.lat + ', ' + n.lng + ', \'' + safeId + '\', \'neighbor\') " style="cursor: pointer; "';
             }
 
+            // Color Type D red
+            const typeStyle = n.type.startsWith('D') ? 'color: #DC2626; font-weight: bold;' : '';
+
             rows += '<tr class="log-row">' +
-                '<td class="log-cell-type">' + n.type + '</td>' +
+                '<td class="log-cell-type" style="' + typeStyle + '">' + n.type + '</td>' +
                 '<td class="log-cell-name"><span ' + nClickAction + '>' + n.name + '</span> <span style="color:#666; font-size:10px;">(' + nIdLabel + ')</span></td>' +
                 '<td class="log-cell-val">' + n.sc + '</td>' +
                 '<td class="log-cell-val">' + n.rscp + '</td>' +
@@ -5227,6 +5688,7 @@ document.addEventListener('DOMContentLoaded', () => {
             '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-top:15px; border-top:1px solid #444; padding-top:10px;">' +
             '<button class="btn btn-blue" onclick="window.analyzePoint(this)" style="flex:1; justify-content: center; min-width: 120px;">Analyze Point</button>' +
             '<button class="btn btn-green" onclick="window.deepAnalyzePoint(this)" style="flex:1; justify-content: center; min-width: 120px;">Deep Analyze</button>' +
+            '<button class="btn btn-orange" onclick="window.throughputAnalysis(this)" style="flex:1; justify-content: center; min-width: 120px; background-color: #ea580c; color: white;">Throughput Analysis</button>' +
             '<button class="btn btn-purple" onclick="window.generateManagementSummary()" style="flex:1; justify-content: center; min-width: 120px;">MANAGEMENT</button>' +
             '</div>' +
 
@@ -6732,13 +7194,77 @@ document.addEventListener('DOMContentLoaded', () => {
             // If customMetrics exist, use them. Else use Fixed NMF list.
 
             if (log.customMetrics && log.customMetrics.length > 0) {
-                actions.appendChild(addHeader('Detected Metrics'));
+                const groups = {
+                    'Standard': [],
+                    'DT Analysis': [],
+                    'POWER CONTROL': [],
+                    'HANDOVER & ACTIVE SET ANALYSIS': [],
+                    'RADIO LINK FAILURE (RLF)': [],
+                    'RRC & CS RELEASE CAUSE': [],
+                    'Active Set': [],
+                    'Monitored Set': [],
+                    'Detected Set': []
+                };
 
-                log.customMetrics.forEach(metric => {
-                    let label = metric;
-                    if (metric === 'throughput_dl') label = 'DL Throughput (Kbps)';
-                    if (metric === 'throughput_ul') label = 'UL Throughput (Kbps)';
-                    actions.appendChild(addAction(label, metric));
+                log.customMetrics.forEach(m => {
+                    const low = m.toLowerCase();
+                    if (/^a\d+_/.test(low)) groups['Active Set'].push(m);
+                    else if (/^m\d+_/.test(low)) groups['Monitored Set'].push(m);
+                    else if (/^d\d+_/.test(low)) groups['Detected Set'].push(m);
+                    else if (m === 'UE Tx Power' || m === 'NodeB Tx Power' || m === 'TPC') groups['POWER CONTROL'].push(m);
+                    else if (m === 'RRC State' || m === 'bler_dl' || m === 'bler_ul' || m === 'Throughput' || m === 'RSSI') groups['DT Analysis'].push(m);
+                    else if (m === 'Active Set Size' || m === 'AS Event' || m === 'HO Command' || m === 'HO Completion') groups['HANDOVER & ACTIVE SET ANALYSIS'].push(m);
+                    else if (m === 'RLF indication' || m === 'UL sync loss (UE can’t reach NodeB)' || m === 'DL sync loss (Interference / coverage)' || m === 'T310' || m === 'T312') groups['RADIO LINK FAILURE (RLF)'].push(m);
+                    else if (m === 'rrc_rel_cause' || m === 'cs_rel_cause' || m === 'iucs_status') groups['RRC & CS RELEASE CAUSE'].push(m);
+                    else groups['Standard'].push(m);
+                });
+
+                Object.keys(groups).forEach(groupName => {
+                    const list = groups[groupName];
+                    if (list.length === 0) return;
+
+                    // Group Container
+                    const groupContainer = document.createElement('div');
+                    groupContainer.style.marginBottom = '5px';
+
+                    // Header
+                    const header = document.createElement('div');
+                    header.innerHTML = '▶ ' + groupName;
+                    header.style.cssText = 'font-size:10px; color:#aaa; margin-bottom:4px; font-weight:bold; text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; user-select:none;';
+
+                    // Metric List Container
+                    const body = document.createElement('div');
+                    body.style.display = 'none'; // Default hidden
+                    body.style.paddingLeft = '5px'; // Indent
+                    body.style.flexDirection = 'column';
+                    body.style.gap = '4px';
+
+                    // Open "Standard" by default
+                    if (groupName === 'Standard') {
+                        body.style.display = 'flex';
+                        header.innerHTML = '▼ ' + groupName;
+                    }
+
+                    // Toggle Logic
+                    header.onclick = () => {
+                        const isHidden = body.style.display === 'none';
+                        body.style.display = isHidden ? 'flex' : 'none';
+                        header.innerHTML = (isHidden ? '▼ ' : '▶ ') + groupName;
+                    };
+
+                    list.forEach(metric => {
+                        let label = metric;
+                        if (metric === 'throughput_dl') label = 'DL Throughput (Kbps)';
+                        if (metric === 'throughput_ul') label = 'UL Throughput (Kbps)';
+
+                        // Use existing helper to create button
+                        const btn = addAction(label, metric);
+                        body.appendChild(btn);
+                    });
+
+                    groupContainer.appendChild(header);
+                    groupContainer.appendChild(body);
+                    actions.appendChild(groupContainer);
                 });
 
                 // Also add "Time" and "GPS" if they exist in basic points but maybe not in customMetrics list?
@@ -6771,6 +7297,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 actions.appendChild(addAction('A2 SC', 'active_set_A2_SC'));
                 actions.appendChild(addAction('A3 RSCP', 'active_set_A3_RSCP'));
                 actions.appendChild(addAction('A3 SC', 'active_set_A3_SC'));
+
+                // GROUP: RRC & CS RELEASE CAUSE
+                actions.appendChild(addHeader('RRC & CS RELEASE CAUSE'));
+                actions.appendChild(addAction('RRC Release Cause', 'rrc_rel_cause'));
+                actions.appendChild(addAction('CS Release Cause', 'cs_rel_cause'));
+                actions.appendChild(addAction('IU-CS Status', 'iucs_status'));
 
                 // GROUP: Neighbors
                 actions.appendChild(addHeader('Neighbors'));
@@ -7756,3 +8288,250 @@ window.showEvent1AGrid = function (logId) {
 };
 
 
+
+// --- Throughput Analysis Feature ---
+window.throughputAnalysis = (btn) => {
+    try {
+        let script = document.getElementById('point-data-stash');
+        if (!script && btn) {
+            const container = btn.closest('.panel, .card, .modal') || btn.parentNode;
+            script = container?.querySelector('#point-data-stash');
+        }
+
+        if (!script) {
+            alert('Analysis data missing.');
+            return;
+        }
+
+        const data = JSON.parse(script.textContent);
+
+        // 1. Evaluate Scenarios
+        const report = performSmartThroughputAnalysis(data);
+        console.log('Throughput Analysis Report:', report);
+
+        // 2. Render Report
+        renderThroughputReport(report);
+
+    } catch (e) {
+        console.error('Throughput Analysis error:', e);
+        alert('Analysis error: ' + e.message);
+    }
+};
+
+function performSmartThroughputAnalysis(data) {
+    // Helper to get float values safely
+    const getVal = (...aliases) => {
+        for (const a of aliases) {
+            const na = a.toLowerCase().replace(/[\s\-_()%]/g, '');
+            for (const k in data) {
+                const nk = k.toLowerCase().replace(/[\s\-_()%]/g, '');
+                if (nk === na || nk.includes(na)) {
+                    const v = parseFloat(data[k]);
+                    if (!Number.isNaN(v)) return v;
+                }
+            }
+        }
+        return null;
+    };
+
+    const kpi = {
+        rsrp: getVal('dominant rsrp', 'rsrp'),
+        rsrq: getVal('dominant rsrq', 'rsrq'),
+        cqi: getVal('average dl wideband cqi', 'cqi'),
+        sinr: getVal('sinr', 'average sinr'),
+        bler: getVal('dl ibler', 'bler'),
+        ulBler: getVal('ul ibler'),
+        avgDlThp: getVal('average dl throughput', 'avg dl thp'),
+        maxDlThp: getVal('maximum dl throughput', 'max dl thp'),
+        dlLowRatio: getVal('dl low-throughput ratio', 'dl low thp ratio'),
+        dlRbQty: getVal('average dl rb quantity', 'dl rb'),
+        ulRbQty: getVal('average ul rb quantity', 'ul rb'),
+        rank1: getVal('rank 1 percentage', 'rank1'),
+        rank2: getVal('rank 2 percentage', 'rank2'),
+        dl1cc: getVal('dl 1cc percentage'),
+        dl2cc: getVal('dl 2cc percentage'),
+        specEff: getVal('dl spectrum efficiency', 'spectral efficiency'),
+        traffic: getVal('total traffic volume'),
+        users: getVal('rrc connected users', 'average users'),
+        packetLoss: getVal('packet loss', 'pl'),
+        latency: getVal('latency', 'rtt'),
+        retrans: getVal('rlc retransmission', 'harq retransmission'),
+        ulThp: getVal('average ul throughput'),
+        maxUlThp: getVal('maximum ul throughput', 'max ul thp')
+    };
+
+    // --- SMART RCA LOGIC ---
+    let primaryDiagnosis = "Healthy / Normal Performance";
+    let color = "green";
+    const contributors = [];
+    const actions = [];
+    let rcaNarrative = "Metrics indicate the cell is performing within expected parameters.";
+
+    // Thresholds
+    const t = {
+        traffic: 0.5,
+        coverage: { rsrp: -110, cqi: 7 },
+        quality: { rsrq: -14, sinr: 5 },
+        load: { prb: 80 },
+        efficiency: { se: 1.0, cqi: 10 },
+        throughput: { low: 2000 } // kbps
+    };
+
+    // 1. Data Validity Check (Low Traffic)
+    if (kpi.traffic !== null && kpi.traffic < t.traffic) {
+        primaryDiagnosis = "⚠️ LOW TRAFFIC VOLUME";
+        color = "gray";
+        rcaNarrative = `Total traffic volume (${kpi.traffic} MB) is too low for reliable analysis.`;
+        contributors.push(`Traffic Volume < ${t.traffic} MB`);
+        actions.push("Ignore this point for performance benchmarking.");
+        actions.push("Retest with larger file download.");
+
+        return { kpi, primaryDiagnosis, color, rcaNarrative, contributors, actions };
+    }
+
+    // Only proceed to detailed RCA if Throughput is Low
+    if (kpi.avgDlThp !== null && kpi.avgDlThp < t.throughput.low) {
+
+        // 2. Coverage Check
+        // If RSRP < -110 dBm AND CQI is low (< 7) -> Coverage Limited.
+        if (kpi.rsrp !== null && kpi.rsrp < t.coverage.rsrp && kpi.cqi !== null && kpi.cqi < t.coverage.cqi) {
+            primaryDiagnosis = "⚠️ COVERAGE LIMITED";
+            color = "red";
+            rcaNarrative = "Throughput is limited by weak signal strength and poor channel quality.";
+            contributors.push(`RSRP (${kpi.rsrp} dBm) < ${t.coverage.rsrp} dBm`);
+            contributors.push(`CQI (${kpi.cqi}) < ${t.coverage.cqi}`);
+
+            actions.push("Check antenna tilt (uptilt/azimuth adjustment).");
+            actions.push("Verify site coverage area.");
+            actions.push("Consider coverage expansion (New Site/Repeater).");
+
+        }
+        // 3. Quality Check
+        // Is RSRQ < -14 dB or SINR < 5 dB? -> Quality/Interference Limited.
+        else if ((kpi.rsrq !== null && kpi.rsrq < t.quality.rsrq) || (kpi.sinr !== null && kpi.sinr < t.quality.sinr)) {
+            primaryDiagnosis = "⚠️ QUALITY / INTERFERENCE LIMITED";
+            color = "orange";
+            rcaNarrative = "Signal quality is degraded by interference, impacting throughput.";
+            if (kpi.rsrq < t.quality.rsrq) contributors.push(`RSRQ (${kpi.rsrq} dB) < ${t.quality.rsrq} dB`);
+            if (kpi.sinr < t.quality.sinr) contributors.push(`SINR (${kpi.sinr} dB) < ${t.quality.sinr} dB`);
+
+            actions.push("Check for overshooting neighbors/pollution.");
+            actions.push("Optimize antenna downtilts.");
+            actions.push("Review PCI planning (Collision/Confusion).");
+
+        }
+        // 4. Load Check
+        // If PRB Usage > 80% AND Radio Quality is good (implied else) -> Capacity Limited
+        else if (kpi.dlRbQty !== null && kpi.dlRbQty > t.load.prb) {
+            primaryDiagnosis = "⚠️ CAPACITY LIMITED (CONGESTION)";
+            color = "red";
+            rcaNarrative = "High cell load is restricting user throughput resources.";
+            contributors.push(`PRB Usage (${kpi.dlRbQty}%) > ${t.load.prb}%`);
+
+            actions.push("Enable Carrier Aggregation / Load Balancing.");
+            actions.push("Capacity Expansion (New Carrier/Sector Split).");
+            actions.push("Check user density and heavy traffic users.");
+
+        }
+        // 5. Efficiency Check
+        // If Spectral Efficiency < 1.0 AND CQI >= 10 -> Radio Efficiency Issue
+        else if (kpi.specEff !== null && kpi.specEff < t.efficiency.se && kpi.cqi !== null && kpi.cqi >= t.efficiency.cqi) {
+            primaryDiagnosis = "⚠️ RADIO EFFICIENCY ISSUE";
+            color = "yellow";
+            rcaNarrative = "Channel quality (CQI) is good, but Spectrum Efficiency is unexpectedly low.";
+            contributors.push(`Spectral Efficiency (${kpi.specEff}) < ${t.efficiency.se} bps/Hz`);
+            contributors.push(`CQI (${kpi.cqi}) >= ${t.efficiency.cqi}`);
+
+            if (kpi.rank1 > 80) contributors.push(`MIMO Rank 1 High: ${kpi.rank1}%`);
+
+            actions.push("Check MIMO configuration and cabling.");
+            actions.push("Verify transmission mode settings.");
+            actions.push("Check for potential device limitations.");
+
+        }
+        // 6. UE/Backhaul Check
+        // If Radio & Load are good but Thp is low -> Non-Radio Issue
+        else {
+            primaryDiagnosis = "⚠️ NON-RADIO ISSUE (BACKHAUL / UE / CORE)";
+            color = "yellow";
+            rcaNarrative = "Radio conditions (Coverage, Quality, Load) appear healthy, yet throughput is low.";
+            contributors.push("Radio Metrics: Healthy");
+            contributors.push(`Throughput: ${(kpi.avgDlThp / 1000).toFixed(2)} Mbps`);
+
+            if (kpi.packetLoss > 1) contributors.push(`Packet Loss: ${kpi.packetLoss}%`);
+            if (kpi.latency > 100) contributors.push(`Latency: ${kpi.latency} ms`);
+
+            actions.push("Investigate Transport/Backhaul for congestion/errors.");
+            actions.push("Check Core Network logs for GTP errors.");
+            actions.push("Verify UE Category/Capability limitations.");
+            actions.push("Check TCP Window performance (TCP Optimizers).");
+        }
+
+    } else if (kpi.avgDlThp !== null) {
+        // High Throughput
+        primaryDiagnosis = "✅ HEALTHY PERFORMANCE";
+        color = "green";
+        rcaNarrative = "Throughput is good (>2 Mbps). No critical issues detected.";
+    }
+
+    return { kpi, primaryDiagnosis, color, rcaNarrative, contributors, actions };
+}
+
+function renderThroughputReport(report) {
+    const modalHtml = `
+            <div class="analysis-modal-overlay nav-modal-overlay" onclick="if(event.target===this) this.remove()">
+                <div class="analysis-modal" style="width: 800px; max-width: 95vw;">
+                    <div class="analysis-header" style="background:#ea580c;"> <!-- Orange/Red for Thp Analysis -->
+                        <h3>📉 LTE Throughput Diagnostic</h3>
+                         <button class="analysis-close-btn" onclick="this.closest('.analysis-modal-overlay').remove()">×</button>
+                    </div>
+                    <div class="analysis-content" style="padding: 25px; background: #111827; color: #eee; max-height:80vh; overflow-y:auto;">
+                        <div style="display:flex; gap:20px; margin-bottom:20px;">
+                            <div style="flex:1; padding:15px; background:rgba(37, 99, 235, 0.1); border-radius:6px; border-left:4px solid #2563eb;">
+                                <div style="font-size:12px; color:#aaa; margin-bottom:4px;">DOWNLINK</div>
+                                ${report.kpi.avgDlThp ? `<div style="font-size:16px; font-weight:bold; color:#fff;">Avg: ${(report.kpi.avgDlThp / 1000).toFixed(2)} Mbps</div>` : ''}
+                                ${report.kpi.maxDlThp ? `<div style="font-size:14px; color:#ccc;">Max: ${(report.kpi.maxDlThp / 1000).toFixed(2)} Mbps</div>` : ''}
+                            </div>
+                            <div style="flex:1; padding:15px; background:rgba(16, 185, 129, 0.1); border-radius:6px; border-left:4px solid #10b981;">
+                                <div style="font-size:12px; color:#aaa; margin-bottom:4px;">UPLINK</div>
+                                ${report.kpi.ulThp ? `<div style="font-size:16px; font-weight:bold; color:#fff;">Avg: ${(report.kpi.ulThp / 1000).toFixed(2)} Mbps</div>` : '<div style="color:#666; font-style:italic;">No UL Data</div>'}
+                                ${report.kpi.maxUlThp ? `<div style="font-size:14px; color:#ccc;">Max: ${(report.kpi.maxUlThp / 1000).toFixed(2)} Mbps</div>` : ''}
+                            </div>
+                        </div>
+
+                        <!-- Diagnosis Header -->
+                        <div style="text-align:center; padding:20px; border-radius:8px; margin-bottom:25px; background:${report.color === 'red' ? 'rgba(239, 68, 68, 0.2)' : report.color === 'orange' ? 'rgba(249, 115, 22, 0.2)' : report.color === 'yellow' ? 'rgba(234, 179, 8, 0.2)' : 'rgba(16, 185, 129, 0.2)'}; border:2px solid ${report.color === 'red' ? '#ef4444' : report.color === 'orange' ? '#f97316' : report.color === 'yellow' ? '#eab308' : '#10b981'};">
+                             <h2 style="margin:0; color:#fff; font-size:24px;">${report.primaryDiagnosis}</h2>
+                             <p style="margin:10px 0 0 0; color:#ddd; font-size:15px;">${report.rcaNarrative}</p>
+                        </div>
+
+                        <!-- Contributors -->
+                        ${report.contributors.length > 0 ? `
+                        <div style="margin-bottom:25px;">
+                            <h4 style="color:#bfdbfe; border-bottom:1px solid #333; padding-bottom:5px;">📊 Key Contributors</h4>
+                             <ul style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px; padding-left:20px;">
+                                ${report.contributors.map(c => `<li style="color:#e5e7eb;">${c}</li>`).join('')}
+                             </ul>
+                        </div>` : ''}
+
+                         <!-- Actions -->
+                        ${report.actions.length > 0 ? `
+                        <div style="margin-bottom:25px;">
+                            <h4 style="color:#86efac; border-bottom:1px solid #333; padding-bottom:5px;">🛠️ Recommended Actions</h4>
+                             <ul style="margin-top:10px; padding-left:20px;">
+                                ${report.actions.map(a => `<li style="color:#e5e7eb; margin-bottom:5px;">${a}</li>`).join('')}
+                             </ul>
+                        </div>` : ''}
+
+                         <div style="margin-top:30px; border-top:1px solid #333; padding-top:10px; font-size:12px; color:#666;">
+                            * AI Diagnosis matches the strongest correlation path.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+    const div = document.createElement('div');
+    div.innerHTML = modalHtml;
+    document.body.appendChild(div.firstElementChild);
+}

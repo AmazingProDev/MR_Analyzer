@@ -253,11 +253,12 @@ class MapRenderer {
     getColor(val, metric = 'level') {
         if (val === undefined || val === null || val === 'N/A' || val === '') return '#888';
 
-        // 1. Priority: Discrete Identity Metrics
-        // (Moved up to prevent 'Cell ID' being matched as 'level' by getThresholdKey default)
         const discreteMetrics = [
             'cellId', 'cid', 'pci', 'sc', 'lac', 'serving_cell_name', 'Cell ID',
-            'eNodeB Name', 'Cell Name', 'eNodeB ID-Cell ID', 'CellName', 'Site Name'
+            'eNodeB Name', 'Cell Name', 'eNodeB ID-Cell ID', 'CellName', 'Site Name',
+            'RRC State', 'AS Event', 'HO Command', 'HO Completion', 'Active Set Size',
+            'RLF indication', 'UL sync loss (UE can’t reach NodeB)', 'DL sync loss (Interference / coverage)', 'T310', 'T312',
+            'rrc_rel_cause', 'cs_rel_cause', 'iucs_status'
         ];
         if (discreteMetrics.includes(metric) || metric.toLowerCase().includes('name') || metric.toLowerCase().includes('id-cell')) {
             return this.getDiscreteColor(val);
@@ -337,6 +338,24 @@ class MapRenderer {
 
         // Normalize: Remove whitespace to match Index keys
         const str = sVal.replace(/\s/g, '');
+
+        // RRC State Fixed Colors
+        if (sVal === 'CELL_DCH') return '#00ff00'; // Green
+        if (sVal === 'CELL_FACH') return '#ffff00'; // Yellow
+        if (sVal === 'IDLE') return '#808080'; // Gray
+        if (sVal === 'CELL_PCH' || sVal === 'URA_PCH') return '#ff00ff'; // Magenta
+
+        // HO / AS Events
+        if (sVal === 'AS Add') return '#22c55e'; // Green
+        if (sVal === 'AS Remove') return '#ef4444'; // Red
+        if (sVal === 'HO Command') return '#f97316'; // Orange
+        if (sVal === 'HO Completion') return '#0000ff'; // Blue
+
+        // RLF / Sync Events
+        if (sVal === 'RLF indication') return '#ff0000'; // Bright Red
+        if (sVal === 'UL sync loss (UE can’t reach NodeB)') return '#eab308'; // Yellow/Gold
+        if (sVal === 'DL sync loss (Interference / coverage)') return '#f87171'; // Light Red/Coral
+        if (sVal.startsWith('T310') || sVal.startsWith('T312')) return '#a855f7'; // Purple
 
         // Custom 12-color palette from user image
         const palette = [
@@ -641,7 +660,8 @@ class MapRenderer {
                 const val = this.getMetricValue(p, metric);
 
                 // Handle Identity Metrics Collection for Legend
-                if (metric === 'cellId' || metric === 'cid' || metric === 'Cell ID') {
+                if (metric === 'cellId' || metric === 'cid' || metric === 'Cell ID' || metric === 'RRC State' ||
+                    metric === 'Active Set Size' || metric === 'AS Event' || metric === 'HO Command' || metric === 'HO Completion') {
                     if (val !== undefined && val !== null) {
                         const sVal = String(val);
                         idsCollection.set(sVal, (idsCollection.get(sVal) || 0) + 1);
@@ -671,12 +691,21 @@ class MapRenderer {
                     }
                 }
 
+                if (metric !== 'level' && metric !== 'quality') { // Only skip for specific metrics
+                    if (val === undefined || val === null || val === 'N/A' || val === '') continue;
+                }
+
                 const color = this.getColor(val, metric);
 
                 if (p.lat !== undefined && p.lat !== null && p.lng !== undefined && p.lng !== null) {
                     validLocations.push([p.lat, p.lng]);
 
                     let layer;
+                    const isEvent = p.type === 'EVENT';
+                    let radius = isEvent ? 7 : 4; // Events are larger
+
+
+                    const weight = isEvent ? 2 : 1; // Thicker border for events
 
                     // CHECK FOR POLYGON GEOMETRY (Imported SHP Grid)
                     if (p.geometry && (p.geometry.type === 'Polygon' || p.geometry.type === 'MultiPolygon')) {
@@ -698,12 +727,12 @@ class MapRenderer {
                     } else {
                         // Default Point Rendering
                         layer = L.circleMarker([p.lat, p.lng], {
-                            radius: 4,
+                            radius: radius,
                             fillColor: color,
-                            color: "#000",
-                            weight: 1,
+                            color: isEvent ? "#fff" : "#000",
+                            weight: weight,
                             opacity: 1,
-                            fillOpacity: 0.8,
+                            fillOpacity: isEvent ? 1 : 0.8,
                             pane: 'sitesPane',
                             renderer: this.sitesSvgRenderer,
                             interactive: true
@@ -852,6 +881,12 @@ class MapRenderer {
             this.activeMetricIds = null;
         }
 
+        // OVERLAY MODE for RRC/CS
+        if (metric === 'rrc_rel_cause' || metric === 'cs_rel_cause' || metric === 'iucs_status') {
+            this.addOverlayLayer(id, points, metric);
+            return;
+        }
+
         this.removeLogLayer(id);
         this.addLogLayer(id, points, metric, true);
     }
@@ -967,6 +1002,60 @@ class MapRenderer {
 
         this.rebuildSiteIndex();
         this.renderSites(fitBounds);
+    }
+
+    addOverlayLayer(id, points, metric) {
+        // Overlay for RRC/CS Release Causes (Red Flags)
+        // Do not clear existing logLayers. Just add a new specific layer.
+        const overlayId = id + '_overlay_' + metric;
+
+        if (this.logLayers[overlayId]) {
+            this.map.removeLayer(this.logLayers[overlayId]);
+        }
+
+        const layerGroup = L.layerGroup();
+        let count = 0;
+
+        points.forEach(p => {
+            if (!p.lat || !p.lng) return;
+
+            // EVENT ONLY: To prevent drawing flags on every measurement point (sticky state)
+            if (p.type !== 'EVENT') return;
+
+            const val = this.getMetricValue(p, metric);
+
+            // Filter Invalid Data for Overlay
+            // Allow "Normal" and "Normal Clearing" as per user request to see "valid data"
+            if (!val || val === 'N/A' || val === '-') return;
+
+            const isNormal = val.toString().toLowerCase().includes('normal');
+
+            // Color Logic: Red for Abnormal, Green (Hue Rotated) for Normal
+            // 🚩 is Red (0deg). Rotating ~100deg-120deg makes it Green.
+            const colorStyle = isNormal ? 'filter: hue-rotate(110deg);' : '';
+
+            // RED/GREEN FLAG ICON
+            const flagIcon = L.divIcon({
+                className: 'custom-flag-icon',
+                html: `<div style="font-size: 24px; color: red; text-shadow: 2px 2px 0px white; ${colorStyle}">🚩</div>`,
+                iconSize: [24, 24],
+                iconAnchor: [4, 20] // Bottom-left corner roughly
+            });
+
+            const marker = L.marker([p.lat, p.lng], { icon: flagIcon, zIndexOffset: 1000 })
+                .addTo(layerGroup);
+
+            marker.bindPopup(`<b>${metric}</b><br>${val}<br>Time: ${p.time}`);
+            count++;
+        });
+
+        if (count > 0) {
+            layerGroup.addTo(this.map);
+            this.logLayers[overlayId] = layerGroup; // Track it to allow removal later if needed
+            console.log(`[MapRenderer] Added Overlay ${metric}: ${count} points.`);
+        } else {
+            alert(`No abnormal ${metric} events found.`);
+        }
     }
 
     removeSiteLayer(id) {

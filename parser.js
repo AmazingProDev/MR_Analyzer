@@ -249,6 +249,11 @@ const NMFParser = {
         // --- PASS 2: Processing ---
         let allPoints = [];
         let currentNeighbors = []; // Global state for signaling snapshot
+        let currentRrcState = 'IDLE'; // Default Initial State
+        let latestUeTxPower = null;
+        let latestNodeBTxPower = null;
+        let latestTpc = null;
+        let lastAsSize = null;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
@@ -261,65 +266,385 @@ const NMFParser = {
             const state = findLastAt(identityTrack, time) || { cid: 'N/A', rnc: null, lac: 'N/A', psc: null };
             const gps = findLastAt(gpsTrack, time);
 
-            if (header === 'CELLMEAS') {
-                if (!gps) continue;
-                const techId = parseInt(parts[3]);
-                let servingFreq = parseFloat(parts[7]);
-                let servingLevel = parseFloat(parts[8]);
+            // RRC State State Machine (Simple Heuristic)
+            const upperHeader = header.toUpperCase();
+            if (upperHeader === 'RRCSM') {
+                const partsForMsg = line.toUpperCase(); // check whole line for ease
+                const isDl = parts[4] === '2';
+                const isUl = parts[4] === '1';
 
-                // SANITY CHECK: Fix for indices shifts (e.g. 70003 instead of RSCP)
-                // RSCP/RSRP should be negative. If > -15 (allow some margin close to 0), it's suspicious.
-                if (servingLevel > -15 || isNaN(servingLevel)) {
-                    // Try adjacent columns for a plausible signal level (-140 to -25)
-                    const candidates = [9, 10, 6, 11, 12];
-                    for (let cIdx of candidates) {
-                        if (cIdx < parts.length) {
-                            const val = parseFloat(parts[cIdx]);
-                            if (!isNaN(val) && val >= -140 && val <= -25) {
-                                servingLevel = val;
-                                break;
+                if (partsForMsg.includes('RADIO_BEARER_SETUP') ||
+                    partsForMsg.includes('RADIO_BEARER_RECONFIGURATION') ||
+                    partsForMsg.includes('PHYSICAL_CHANNEL_RECONFIGURATION') ||
+                    partsForMsg.includes('ACTIVE_SET_UPDATE') ||
+                    partsForMsg.includes('MEASUREMENT_CONTROL')) {
+                    currentRrcState = 'CELL_DCH';
+
+                    if (isDl && !partsForMsg.includes('COMPLETE')) {
+                        // Handover Command
+                        allPoints.push({
+                            lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                            type: 'EVENT', event: 'HO Command', message: parts[5],
+                            properties: {
+                                'Time': time, 'Type': 'EVENT', 'Event': 'HO Command', 'Message': parts[5],
+                                'HO Command': 'HO Command'
                             }
+                        });
+                    }
+                } else if (partsForMsg.includes('CELL_UPDATE')) {
+                    currentRrcState = 'CELL_FACH';
+                } else if (partsForMsg.includes('PAGING_TYPE')) {
+                    currentRrcState = 'IDLE'; // or PCH
+                } else if (partsForMsg.includes('RRC_CONNECTION_RELEASE')) {
+                    currentRrcState = 'IDLE';
+                    // Added Release Cause Logic
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'RRC Release', message: 'RRC Connection Released',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'RRC Release',
+                            'RRC Release Cause': 'Normal (Implied)',
+                            'rrc_rel_cause': 'Normal',
+                            'cs_rel_cause': state.cs_cause || 'N/A',
+                            'iucs_status': 'Released'
                         }
+                    });
+                    if (!state.rrc_cause) state.rrc_cause = 'Normal';
+                    state.iucs_status = 'Released';
+                } else if (partsForMsg.includes('RRC_CONNECTION_REJECT')) {
+                    currentRrcState = 'IDLE';
+                }
+
+                if (isUl && partsForMsg.includes('COMPLETE')) {
+                    // Handover / Message Completion
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'HO Completion', message: parts[5],
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'HO Completion', 'Message': parts[5],
+                            'HO Completion': 'HO Completion'
+                        }
+                    });
+                }
+
+                // --- NEW: Radio Link Failure & Sync Status ---
+                const msgUpper = partsForMsg.replace(/_/g, ' '); // Normalize for loose matching
+                if (msgUpper.includes('OUT') && msgUpper.includes('SYNC')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'DL sync loss (Interference / coverage)', message: 'Downlink Out of Sync Indication',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'DL sync loss (Interference / coverage)',
+                            'DL sync loss (Interference / coverage)': 'DL sync loss (Interference / coverage)'
+                        }
+                    });
+                }
+                if (msgUpper.includes('UL') && msgUpper.includes('SYNC') && msgUpper.includes('LOSS')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'UL sync loss (UE can’t reach NodeB)', message: 'Uplink Synchronization Loss',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'UL sync loss (UE can’t reach NodeB)',
+                            'UL sync loss (UE can’t reach NodeB)': 'UL sync loss (UE can’t reach NodeB)'
+                        }
+                    });
+                }
+                if (msgUpper.includes('RL FAILURE') || msgUpper.includes('RADIO LINK FAILURE') || msgUpper.includes('RLF') || msgUpper.includes('REESTABLISHMENT')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'RLF indication', message: parts[5] || 'Radio Link Failure Indication',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'RLF indication',
+                            'RLF indication': 'RLF indication'
+                        }
+                    });
+                }
+
+                // --- NEW: Timers (T310, T312) ---
+                if (partsForMsg.includes('T310_EXPIRY') || partsForMsg.includes('T310 EXPIRED')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'T310', message: 'Timer T310 Expired',
+                        properties: { 'Time': time, 'Type': 'EVENT', 'Event': 'T310', 'T310': 'Expired' }
+                    });
+                }
+                if (partsForMsg.includes('T312_EXPIRY') || partsForMsg.includes('T312 EXPIRED')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'T312', message: 'Timer T312 Expired',
+                        properties: { 'Time': time, 'Type': 'EVENT', 'Event': 'T312', 'T312': 'Expired' }
+                    });
+                }
+            } else if (upperHeader === 'L3SM') {
+                const messageName = parts[5].replace(/^"|"$/g, '');
+                if (messageName === 'RELEASE' || messageName === 'DISCONNECT') {
+                    // CS Release
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'CS Release', message: 'CS Call Released',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'CS Release',
+                            'CS Release Cause': 'Normal Clearing',
+                            'rrc_rel_cause': state.rrc_cause || 'N/A',
+                            'cs_rel_cause': 'Normal Clearing',
+                            'iucs_status': 'Released'
+                        }
+                    });
+                    state.cs_cause = 'Normal Clearing';
+                    state.iucs_status = 'Released';
+                } else if (messageName === 'CONNECT' || messageName === 'SETUP') {
+                    state.iucs_status = 'Connected';
+                    state.cs_cause = '-';
+                }
+            } else if (upperHeader === 'RRCSM' || upperHeader === 'L3SM') {
+                const msgUpper = line.toUpperCase().replace(/_/g, ' ');
+                if (msgUpper.includes('T310')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'T310', message: 'T310 Timer Expired',
+                        properties: { 'Time': time, 'Type': 'EVENT', 'Event': 'T310', 'T310': 'Expired' }
+                    });
+                }
+                if (msgUpper.includes('T312')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'T312', message: 'T312 Timer Expired',
+                        properties: { 'Time': time, 'Type': 'EVENT', 'Event': 'T312', 'T312': 'Expired' }
+                    });
+                }
+            } else if (upperHeader === 'TXPC') {
+                const val = parseFloat(parts[4]);
+                if (!isNaN(val)) latestUeTxPower = val;
+                const tpc = parseInt(parts[5]);
+                if (!isNaN(tpc)) latestTpc = tpc;
+            } else if (upperHeader === 'RXPC') {
+                const val = parseFloat(parts[5]);
+                if (!isNaN(val)) latestNodeBTxPower = val;
+            } else if (upperHeader === 'RRD') {
+                const cause = parts[6];
+                if (cause === '1' || cause === '5') {
+                    const eventName = (cause === '1') ? 'Call Drop' : 'RLF indication';
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: eventName, message: `RRD Release Cause ${cause}`,
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': eventName,
+                            [eventName]: eventName
+                        }
+                    });
+                }
+            } else if (upperHeader === 'RRA') {
+                const cause = parts[5]; // RRA code is usually at index 5 or 6 depending on subversion
+                let eventName = null;
+                if (cause === '16' || cause === '2') eventName = 'RLF indication';
+                else if (cause === '12') eventName = 'DL sync loss (Interference / coverage)';
+                else if (cause === '4') eventName = 'UL sync loss (UE can’t reach NodeB)';
+
+                if (eventName) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: eventName, message: `Radio Resource Alarm (RRA Cause ${cause})`,
+                        properties: { 'Time': time, 'Type': 'EVENT', 'Event': eventName, [eventName]: eventName }
+                    });
+                }
+            } else if (upperHeader === 'RRCSM') {
+                // Clean parts (remove quotes)
+                const messageName = parts[5].replace(/^"|"$/g, '');
+                // console.log(`[DEBUG] RRCSM Msg: ${messageName}`);
+                if (messageName.includes('RELEASE')) console.log(`[DEBUG] RRCSM RELEASE: ${messageName}`);
+
+                if (messageName === 'RRC_CONNECTION_RELEASE') {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'RRC Release', message: 'RRC Connection Released',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'RRC Release',
+                            'RRC Release Cause': 'Normal (Implied)',
+                            'rrc_rel_cause': 'Normal',
+                            'cs_rel_cause': state.cs_cause || 'N/A',
+                            'iucs_status': 'Released'
+                        }
+                    });
+                    // Track last RRC Cause for metric
+                    if (!state.rrc_cause) state.rrc_cause = 'Normal';
+                    state.iucs_status = 'Released';
+                }
+            } else if (upperHeader === 'CAF') {
+                const cause = parts[6];
+                if (cause === '2') {
+                    const messageName = parts[5].replace(/^"|"$/g, '');
+                    // Original RRC Release check removed (wrong place) or kept as fallback? 
+                    // Keeping as fallback if needed, but the main one is RRCSM.
+                    if (messageName === 'RRC_CONNECTION_RELEASE') {
+                        // Fallback logic SAME as above
+                        if (!state.rrc_cause) state.rrc_cause = 'Normal';
+                        state.iucs_status = 'Released';
+                    } else {
+                        // Original RLF indication for CAF cause 2
+                        allPoints.push({
+                            lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                            type: 'EVENT', event: 'RLF indication', message: 'Channel Activation Failure (CAF)',
+                            properties: { 'Time': time, 'Type': 'EVENT', 'Event': 'RLF indication', 'RLF indication': 'RLF indication' }
+                        });
                     }
                 }
-                let servingBand = 'Unknown';
+            } else if (upperHeader === 'L3SM') {
+                // CS Release (CC Release)
+                const messageName = parts[5].replace(/^"|"$/g, '');
+                if (messageName.includes('RELEASE') || messageName.includes('DISCONNECT')) console.log(`[DEBUG] L3SM RELEASE: ${messageName}`);
+                if (messageName === 'RELEASE' || messageName === 'DISCONNECT') {
+                    // CS Release
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'CS Release', message: 'CS Call Released',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'CS Release',
+                            'CS Release Cause': 'Normal Clearing',
+                            'rrc_rel_cause': state.rrc_cause || 'N/A',
+                            'cs_rel_cause': 'Normal Clearing',
+                            'iucs_status': 'Released'
+                        }
+                    });
+                    state.cs_cause = 'Normal Clearing';
+                    state.iucs_status = 'Released';
+                } else if (messageName === 'CONNECT' || messageName === 'SETUP') {
+                    state.iucs_status = 'Connected';
+                    state.cs_cause = '-'; // Reset cause on new call
+                }
+
+                const msgUpper = line.toUpperCase();
+                if (msgUpper.includes('OUT') && msgUpper.includes('SYNC')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'DL sync loss (Interference / coverage)', message: 'Downlink Out of Sync Indication (L3)',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'DL sync loss (Interference / coverage)',
+                            'DL sync loss (Interference / coverage)': 'DL sync loss (Interference / coverage)'
+                        }
+                    });
+                }
+                if (msgUpper.includes('RL FAILURE') || msgUpper.includes('RADIO LINK FAILURE') || msgUpper.includes('RLF') || msgUpper.includes('REESTABLISHMENT')) {
+                    allPoints.push({
+                        lat: gps ? gps.lat : null, lng: gps ? gps.lng : null, time,
+                        type: 'EVENT', event: 'RLF indication', message: 'Radio Link Failure Indication (L3)',
+                        properties: {
+                            'Time': time, 'Type': 'EVENT', 'Event': 'RLF indication',
+                            'RLF indication': 'RLF indication'
+                        }
+                    });
+                }
+            }
+
+            if (upperHeader === 'CELLMEAS') {
+                if (!gps) continue;
+                const techId = parseInt(parts[3]);
+
+                let servingFreq = null;
+                let servingLevel = null;
                 let servingSc = null;
                 let servingEcNo = null;
+                let servingBand = 'Unknown';
+                let valRssi = null;
+                let activeSetCount = 1;
+                let monitoredSetCount = 0;
                 let neighbors = [];
 
                 if (techId === 5) {
-                    // Band Logic
+                    // UMTS (Tech 5)
+                    servingFreq = parseFloat(parts[7]);
+                    servingLevel = parseFloat(parts[8]); // RSCP
+                    servingSc = parts[15] !== undefined ? parseInt(parts[15]) : null;
+                    servingEcNo = parseFloat(parts[16]); // Ec/No
+                    activeSetCount = parseInt(parts[5]) || 1;
+                    monitoredSetCount = parseInt(parts[6]) || 0;
+
                     if (servingFreq >= 10562 && servingFreq <= 10838) servingBand = 'B1 (2100)';
                     else if (servingFreq >= 2937 && servingFreq <= 3088) servingBand = 'B8 (900)';
 
-                    // Initialize serving SC from identity track if available
-                    if (state.psc !== undefined && state.psc !== null) servingSc = state.psc;
+                    // RSSI calculation for 3G
+                    if (!isNaN(servingLevel) && !isNaN(servingEcNo)) {
+                        valRssi = servingLevel - servingEcNo;
+                    }
 
-                    // Neighbors
-                    let nStartIndex = 14;
-                    let nBlockSize = 17;
-                    for (let j = nStartIndex; j < parts.length; j += nBlockSize) {
-                        if (j + 4 >= parts.length) break;
-                        const nFreq = parseFloat(parts[j]);
-                        const nPci = parseInt(parts[j + 1]);
-                        const nEcNo = parseFloat(parts[j + 2]);
-                        const nRscp = parseFloat(parts[j + 4]);
-                        if (!isNaN(nFreq) && !isNaN(nPci)) {
-                            neighbors.push({ freq: nFreq, pci: nPci, ecno: nEcNo, rscp: nRscp });
+                    // Neighbors: Robust Scanning (Tech 5)
+                    for (let k = 15; k < parts.length - 6; k++) {
+                        const type = parseInt(parts[k]);
+                        const freq = parseFloat(parts[k + 2]);
+                        const sc = parseInt(parts[k + 3]);
+                        const ecno = parseFloat(parts[k + 4]);
+                        const rscp = parseFloat(parts[k + 6]);
 
-                            // If this neighbor entry matches our serving freq and SC, capture its metrics
-                            if (Math.abs(nFreq - servingFreq) < 1 && (nPci === servingSc || servingSc === null)) {
-                                if (servingSc === null) servingSc = nPci;
-                                if (servingEcNo === null) servingEcNo = nEcNo;
-                                // Do NOT overwrite servingLevel (RSCP) as it comes from the primary header
+                        const isValidType = !isNaN(type) && type >= 0 && type <= 3;
+                        const isValidFreq = !isNaN(freq) && freq > 2000;
+                        const isValidSc = !isNaN(sc) && sc >= 0 && sc <= 512;
+                        const isValidRscp = !isNaN(rscp) && rscp < -20 && rscp > -140;
+
+                        if (isValidType && isValidFreq && isValidSc && isValidRscp) {
+                            neighbors.push({
+                                freq: freq,
+                                pci: sc,
+                                ecno: ecno,
+                                rscp: rscp,
+                                setType: type
+                            });
+                            // Populate Serving EcNo if missing and this is serving
+                            if (Math.abs(freq - servingFreq) < 1 && sc === servingSc) {
+                                neighbors[neighbors.length - 1].isServing = true;
+                                if (isNaN(servingEcNo)) servingEcNo = ecno;
                             }
+                            k += 8;
                         }
                     }
-                    currentNeighbors = neighbors;
+                } else if (techId === 7) {
+                    // LTE/HSPA+ (Tech 7)
+                    servingFreq = parseFloat(parts[8]);
+                    servingLevel = parseFloat(parts[12]); // RSRP
+                    servingSc = parseInt(parts[10]) || 'N/A'; // PCI
+                    servingEcNo = parseFloat(parts[13]); // RSRQ
+                    valRssi = parseFloat(parts[11]); // RSSI
+                    servingBand = parts[14];
+                    activeSetCount = 1;
+                    monitoredSetCount = parseInt(parts[6]) || 0;
+
+                    // Neighbors: Robust Scanning (Tech 7)
+                    for (let k = 15; k < parts.length - 6; k++) {
+                        const type = parseInt(parts[k]);
+                        const freq = parseFloat(parts[k + 1]);
+                        const pci = parseInt(parts[k + 3]);
+                        const rsrp = parseFloat(parts[k + 4]);
+                        const rssi = parseFloat(parts[k + 5]);
+                        const rsrq = parseFloat(parts[k + 6]);
+
+                        const isValidType = !isNaN(type) && type >= 0 && type <= 3;
+                        const isValidFreq = !isNaN(freq) && freq > 100;
+                        const isValidPci = !isNaN(pci) && pci >= 0 && pci <= 1008;
+                        const isValidRsrp = !isNaN(rsrp) && rsrp < -20 && rsrp > -200;
+
+                        if (isValidType && isValidFreq && isValidPci && isValidRsrp) {
+                            neighbors.push({
+                                freq: freq,
+                                pci: pci,
+                                ecno: rsrq, // RSRQ
+                                rscp: rsrp,  // RSRP
+                                rssi: rssi
+                            });
+                            k += 8; // Advance
+                        }
+                    }
+                } else {
+                    // Fallback
+                    servingFreq = parseFloat(parts[7]);
+                    servingLevel = parseFloat(parts[8]);
+                    servingSc = parts[9];
+                    activeSetCount = parseInt(parts[5]) || 1;
+                }
+
+                // SANITY CHECK: Swap if indices are misaligned
+                if (servingLevel > -15 && servingFreq < -50) {
+                    let tmp = servingFreq; servingFreq = servingLevel; servingLevel = tmp;
                 }
 
                 let rnc = state.rnc;
-                // Robust Fallback: Extract RNC from Long ID if missing
                 if ((!rnc || isNaN(rnc)) && state.cid > 65535) {
                     rnc = state.cid >> 16;
                 }
@@ -338,16 +663,150 @@ const NMFParser = {
                     },
                     properties: {
                         'Time': time,
-                        'Tech': techId === 5 ? 'UMTS' : 'LTE',
+                        'Tech': techId === 5 ? 'UMTS' : (techId === 7 ? 'LTE' : 'Unknown'),
                         'Cell ID': state.cid,
                         'RNC': rnc,
                         'CID': cid,
+                        'LAC': state.lac,
+                        'Freq': servingFreq,
                         'RNC/CID': (rnc !== null && cid !== null) ? `${rnc}/${cid}` : 'N/A',
                         [techId === 5 ? 'Serving RSCP' : 'Serving RSRP']: servingLevel,
-                        'Serving SC/PCI': servingSc,
-                        [techId === 5 ? 'EcNo' : 'RSRQ']: servingEcNo
+                        'Serving SC': servingSc,
+                        [techId === 5 ? 'EcNo' : 'RSRQ']: servingEcNo,
+                        'RRC State': currentRrcState,
+                        'RSSI': valRssi,
+                        'UE Tx Power': latestUeTxPower,
+                        'NodeB Tx Power': latestNodeBTxPower,
+                        'TPC': latestTpc
                     }
                 };
+
+                // Detect AS Add / Remove Events
+                if (lastAsSize !== null && activeSetCount !== lastAsSize) {
+                    const eventName = activeSetCount > lastAsSize ? 'AS Add' : 'AS Remove';
+                    allPoints.push({
+                        lat: gps.lat, lng: gps.lng, time,
+                        type: 'EVENT', event: eventName,
+                        message: `Size: ${lastAsSize} -> ${activeSetCount}`,
+                        properties: {
+                            'Time': time, 'Type': 'EVENT',
+                            'Event': eventName,
+                            'AS Event': eventName,
+                            'Details': `Active Set size changed from ${lastAsSize} to ${activeSetCount}`,
+                            'rrc_rel_cause': state.rrc_cause || 'N/A',
+                            'cs_rel_cause': state.cs_cause || 'N/A',
+                            'iucs_status': state.iucs_status || 'N/A'
+                        }
+                    });
+                }
+                lastAsSize = activeSetCount;
+
+                point.properties['Active Set Size'] = activeSetCount;
+                point.as_size = activeSetCount;
+
+                if (neighbors && neighbors.length > 0) {
+                    currentNeighbors = neighbors;
+                }
+
+                // Flatten Neighbors with A/M/D logic
+                if (neighbors && neighbors.length > 0) {
+                    // Filter out the serving cell entry (duplicates) before labeling
+                    const cleanNeighbors = neighbors.filter(n => !n.isServing);
+
+                    cleanNeighbors.forEach((n, idx) => {
+                        let prefix = 'd'; // Default Detected
+                        let num = 0;
+
+                        // Use setType if available (from Tech 5 parsing)
+                        if (n.setType !== undefined) {
+                            // Correct Logic: Type 1 means Active Candidate or Intra-Freq Monitored.
+                            // Only treat as Active if we are actually IN Soft Handover (Size > 1).
+                            // If AS Size is 1, then ALL neighbors are Monitored/Detected.
+                            const isActiveCandidate = (n.setType === 0 || n.setType === 1);
+
+                            // Check if this neighbor can plausibly be in the active set
+                            // For simplicity, if AS Size > 1, we trust Type 0/1 as Active.
+                            // If AS Size == 1, we force them to Monitored.
+                            if (isActiveCandidate && activeSetCount > 1) {
+                                // Active Set
+                                const activeNeighbors = cleanNeighbors.filter(nb => (nb.setType === 0 || nb.setType === 1));
+                                // Double check: If we have more active candidates than (AS_Size - 1), 
+                                // it implies some Type 1s are actually Monitored.
+                                const maxActiveNeighbors = Math.max(0, activeSetCount - 1);
+                                const activeIdx = activeNeighbors.indexOf(n);
+
+                                if (activeIdx < maxActiveNeighbors) {
+                                    prefix = 'a';
+                                    num = activeIdx + 2; // A2, A3...
+                                } else {
+                                    // Overflow from Active candidates -> Monitored
+                                    prefix = 'm';
+                                    const overflowIdx = activeIdx - maxActiveNeighbors;
+                                    // Need to find where it sits in purely monitored list?
+                                    // Or just append it?
+                                    // Let's treat it as the "Start" of monitored list
+                                    num = overflowIdx + 1;
+                                }
+                            } else if (n.setType === 2 || isActiveCandidate) { // Fallback for Type 1 if AS=1
+                                // Monitored Set
+                                // Filter all "Monitored-like" neighbors (Type 2, plus any Demoted Type 1s)
+                                const monitoredNeighbors = cleanNeighbors.filter(nb => {
+                                    if (nb.setType === 2) return true;
+                                    if ((nb.setType === 0 || nb.setType === 1) && activeSetCount <= 1) return true;
+                                    return false;
+                                });
+                                const monitoredIdx = monitoredNeighbors.indexOf(n);
+                                prefix = 'm';
+                                num = monitoredIdx + 1; // M1, M2...
+                            } else {
+                                // Detected Set
+                                const detectedNeighbors = cleanNeighbors.filter(nb => nb.setType > 2);
+                                const detectedIdx = detectedNeighbors.indexOf(n);
+                                prefix = 'd';
+                                num = detectedIdx + 1; // D1, D2...
+                            }
+                        } else {
+                            // Fallback to old counting logic for Tech 7 or other techs
+                            const numActiveNeighbors = Math.max(0, activeSetCount - 1);
+
+                            // Active Set Neighbors
+                            if (idx < numActiveNeighbors) {
+                                prefix = 'a';
+                                num = idx + 2; // A2, A3...
+                            }
+                            // Monitored Set Neighbors
+                            else if (idx < (numActiveNeighbors + monitoredSetCount)) {
+                                prefix = 'm';
+                                num = idx - numActiveNeighbors + 1; // M1, M2...
+                            }
+                            // Detected Set Neighbors
+                            else {
+                                prefix = 'd';
+                                num = idx - (numActiveNeighbors + monitoredSetCount) + 1; // D1, D2...
+                            }
+                        }
+
+                        // Limit valid count to avoid spam (12 max usually enough)
+                        if (num > 16) return;
+
+                        const keyBase = `${prefix}${num}`;
+
+                        // Inject UI Labels directly into neighbor object
+                        n.type = prefix.toUpperCase() + num; // Result: "A2", "M1"
+                        n.name = n.type;
+
+                        point[`${keyBase}_rscp`] = n.rscp;
+                        point[`${keyBase}_ecno`] = n.ecno;
+                        point[`${keyBase}_sc`] = n.pci;
+                        point[`${keyBase}_freq`] = n.freq;
+
+                        // Add to properties for Popup
+                        point.properties[`${prefix.toUpperCase()}${num} SC`] = n.pci;
+                        point.properties[`${prefix.toUpperCase()}${num} RSCP`] = n.rscp;
+                        point.properties[`${prefix.toUpperCase()}${num} EcNo`] = n.ecno;
+                    });
+                }
+
                 allPoints.push(point);
 
             } else if (header.toUpperCase().includes('RRC') || header.toUpperCase().includes('L3')) {
@@ -364,14 +823,34 @@ const NMFParser = {
                     radioSnapshot: { cellId: state.cid, lac: state.lac, psc: state.psc, rnc: state.rnc, neighbors: currentNeighbors.slice(0, 8) },
                     properties: { 'Time': time, 'Type': 'SIGNALING', 'Message': message }
                 });
-            } else if (header === 'RRD') {
-                const cause = parts[6];
-                if ((cause === '1' || cause === '5') && gps) {
-                    allPoints.push({
-                        lat: gps.lat, lng: gps.lng, time,
-                        type: 'EVENT', event: cause === '1' ? 'Call Drop' : 'Call Fail', message: 'Cause ' + cause,
-                        properties: { 'Time': time, 'Type': 'EVENT', 'Event': cause === '1' ? 'Call Drop' : 'Call Fail', 'Cause': cause }
-                    });
+            } else if (upperHeader === 'RLCBLER' || upperHeader === 'MACBLER') {
+                if (gps && parts.length > 10) {
+                    // Indexes: 4 -> BLER DL, 10 -> BLER UL (Based on User NMF: "RLCBLER,Time,,5,0.0,..." -> 5=tech, 0.0=DL BLER?)
+                    // NMF Format: RLCBLER,Time,,Tech,DL_BLER,Blocks_DL,Err_DL,?,DL_Thru?,UL_BLER...
+                    // User Example: RLCBLER,10:21:36.788,,5,0.0,100,0,2,4,1,0.0,100,0,32,0.0,0,0
+                    // Part 4 is 0.0 (DL BLER likely)
+                    // Part 10 is 0.0 (UL BLER likely)
+
+                    const tech = parseInt(parts[3]);
+                    const dlBler = parseFloat(parts[4]);
+                    const ulBler = parseFloat(parts[10]);
+
+                    if (!isNaN(dlBler) || !isNaN(ulBler)) {
+                        allPoints.push({
+                            lat: gps.lat, lng: gps.lng, time,
+                            type: 'MEASUREMENT', // Treat as measurement to allow coloring
+                            bler_dl: !isNaN(dlBler) ? dlBler : undefined,
+                            bler_ul: !isNaN(ulBler) ? ulBler : undefined,
+                            cellId: state.cid,
+                            properties: {
+                                'Time': time,
+                                'Tech': tech === 5 ? 'UMTS' : 'LTE',
+                                'Cell ID': state.cid,
+                                'BLER DL': !isNaN(dlBler) ? dlBler : 'N/A',
+                                'BLER UL': !isNaN(ulBler) ? ulBler : 'N/A'
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -399,12 +878,31 @@ const NMFParser = {
         }
 
         return {
-            points: measurementPoints,
+            points: measurementPoints.concat(eventPoints),
             signaling: signalingPoints,
             events: eventPoints,
             tech: detectedTech,
             config: this.detected1AConfig || null,
-            configHistory: this.event1AHistory || []
+            configHistory: this.event1AHistory || [],
+            customMetrics: [
+                'Serving RSCP', 'Serving SC', 'EcNo', 'RSSI', 'Freq', 'RRC State', 'UE Tx Power', 'NodeB Tx Power', 'TPC',
+                'Active Set Size', 'AS Event', 'HO Command', 'HO Completion',
+                'RLF indication', 'UL sync loss (UE can’t reach NodeB)', 'DL sync loss (Interference / coverage)', 'T310', 'T312',
+                'RNC', 'Cell ID', 'LAC', 'bler_dl', 'bler_ul',
+                // A2...A4 (Active)
+                ...Array.from({ length: 4 }, (_, i) => [
+                    `a${i + 2}_rscp`, `a${i + 2}_ecno`, `a${i + 2}_sc`
+                ]).flat(),
+                // M1...M12 (Monitored)
+                ...Array.from({ length: 12 }, (_, i) => [
+                    `m${i + 1}_rscp`, `m${i + 1}_ecno`, `m${i + 1}_sc`
+                ]).flat(),
+                // D1...D12 (Detected)
+                ...Array.from({ length: 12 }, (_, i) => [
+                    `d${i + 1}_rscp`, `d${i + 1}_ecno`, `d${i + 1}_sc`
+                ]).flat(),
+                'rrc_rel_cause', 'cs_rel_cause', 'iucs_status'
+            ] // Explicitly return these so app.js creates buttons
         };
     }
 
@@ -688,7 +1186,7 @@ const ExcelParser = {
         return {
             points: points,
             tech: '4G (Excel)', // Assume 4G or Generic
-            customMetrics: customMetrics,
+            customMetrics: customMetrics.concat(['rrc_rel_cause', 'cs_rel_cause', 'iucs_status']),
             signaling: [], // No signaling in simple excel for now
             debugInfo: {
                 scCol: scCol,
